@@ -18,6 +18,9 @@ type OrientationPermission = "granted" | "denied";
 type DeviceOrientationEventConstructor = typeof DeviceOrientationEvent & {
   requestPermission?: () => Promise<OrientationPermission>;
 };
+type DeviceMotionEventConstructor = typeof DeviceMotionEvent & {
+  requestPermission?: () => Promise<OrientationPermission>;
+};
 
 // ============================================
 //  漫游调参区
@@ -45,7 +48,7 @@ const VIEWER_CONFIG = {
   },
   renderer: {
     antialias: true, // 是否启用抗锯齿。
-    exposure: 1.8, // 整体曝光强度；越大画面越亮。
+    exposure: 3, // 整体曝光强度；越大画面越亮。
     shadows: true, // 是否启用阴影计算。
   },
   lighting: {
@@ -106,8 +109,11 @@ function disposeObject(root: THREE.Object3D) {
 export default function MonasteryViewer() {
   const canvasHostRef = useRef<HTMLDivElement>(null);
   const resetCameraRef = useRef<() => void>(() => undefined);
+  const activateGyroRef = useRef<() => void>(() => undefined);
   const keysRef = useRef<MovementKeys>(createMovementKeys());
   const joystickStrengthRef = useRef(0);
+  const risePressedRef = useRef(false);
+  const descendPressedRef = useRef(false);
   const joystickKnobRef = useRef<HTMLDivElement>(null);
   const [isMobileDevice, setIsMobileDevice] = useState(false);
   const [modelReady, setModelReady] = useState(false);
@@ -118,6 +124,7 @@ export default function MonasteryViewer() {
   const [loadLogs, setLoadLogs] = useState<string[]>(["初始化 Viewer 组件"]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [gyroStatus, setGyroStatus] = useState("陀螺仪：未启用");
+  const [canEnableGyro, setCanEnableGyro] = useState(false);
 
   const addLoadLog = useCallback((message: string) => {
     const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -177,12 +184,19 @@ export default function MonasteryViewer() {
     let gyroCalibrated = false;
     let gyroYawOffset = 0;
     let gyroPitchOffset = 0;
+    let gyroPermissionPending = false;
     let disposed = false;
     let animationFrame = 0;
     let loadProgressFrame = 0;
     const initialCameraPosition = new THREE.Vector3();
     let initialYaw = 0;
     let initialPitch = 0;
+    const gyroEuler = new THREE.Euler();
+    const gyroQuaternion = new THREE.Quaternion();
+    const gyroScreenQuaternion = new THREE.Quaternion();
+    const gyroAxisZ = new THREE.Vector3(0, 0, 1);
+    const gyroForward = new THREE.Vector3(0, 0, -1);
+    const worldAdjustQuaternion = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
     // 根据目标点反解视角，避免模型加载完成后镜头突然跳变。
     const syncViewAnglesToTarget = (target: THREE.Vector3) => {
@@ -206,6 +220,8 @@ export default function MonasteryViewer() {
       pitch = initialPitch;
       Object.assign(keys, createMovementKeys());
       joystickStrengthRef.current = 0;
+      risePressedRef.current = false;
+      descendPressedRef.current = false;
       if (joystickKnobRef.current) {
         joystickKnobRef.current.style.transform = "translate(-50%, -50%)";
       }
@@ -255,14 +271,35 @@ export default function MonasteryViewer() {
       if (alpha === null || beta === null || gamma === null) return;
 
       setGyroStatus("陀螺仪：数据正常");
+
+      const alphaRad = THREE.MathUtils.degToRad(alpha);
+      const betaRad = THREE.MathUtils.degToRad(beta);
+      const gammaRad = THREE.MathUtils.degToRad(gamma);
+
+      const legacyOrientation = typeof (window as { orientation?: number }).orientation === "number"
+        ? (window as { orientation?: number }).orientation ?? 0
+        : 0;
+      const screenOrientationDeg = window.screen.orientation?.angle ?? legacyOrientation;
+      const screenOrientationRad = THREE.MathUtils.degToRad(screenOrientationDeg);
+
+      // 参考 three 设备方向控制的姿态换算，处理横竖屏与坐标系差异。
+      gyroEuler.set(betaRad, alphaRad, -gammaRad, "YXZ");
+      gyroQuaternion.setFromEuler(gyroEuler);
+      gyroQuaternion.multiply(worldAdjustQuaternion);
+      gyroQuaternion.multiply(gyroScreenQuaternion.setFromAxisAngle(gyroAxisZ, -screenOrientationRad));
+
+      gyroForward.set(0, 0, -1).applyQuaternion(gyroQuaternion).normalize();
+      const nextYaw = Math.atan2(-gyroForward.x, -gyroForward.z);
+      const nextPitch = Math.asin(THREE.MathUtils.clamp(gyroForward.y, -1, 1));
+
       if (!gyroCalibrated) {
-        gyroYawOffset = THREE.MathUtils.degToRad(alpha);
-        gyroPitchOffset = THREE.MathUtils.degToRad(beta);
+        gyroYawOffset = nextYaw - yaw;
+        gyroPitchOffset = nextPitch - pitch;
         gyroCalibrated = true;
       }
 
-      yaw = THREE.MathUtils.degToRad(alpha) - gyroYawOffset;
-      pitch = -(THREE.MathUtils.degToRad(beta) - gyroPitchOffset);
+      yaw = nextYaw - gyroYawOffset;
+      pitch = nextPitch - gyroPitchOffset;
       pitch = THREE.MathUtils.clamp(
         pitch,
         -VIEWER_CONFIG.camera.maxPitch,
@@ -276,37 +313,59 @@ export default function MonasteryViewer() {
       window.addEventListener("deviceorientationabsolute", onOrientation, { passive: true });
       useGyro = true;
       gyroReady = true;
+      setCanEnableGyro(false);
       setGyroStatus("陀螺仪：已监听");
     };
 
     const activateGyro = async () => {
-      if (!mobile || gyroReady || typeof window.DeviceOrientationEvent === "undefined") return;
+      if (!mobile || gyroReady || gyroPermissionPending || typeof window.DeviceOrientationEvent === "undefined") return;
 
       const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
       if (!window.isSecureContext && !isLocalhost) {
+        setCanEnableGyro(true);
         setGyroStatus("陀螺仪：需要 HTTPS 或 localhost");
         return;
       }
 
       const orientationEvent = DeviceOrientationEvent as DeviceOrientationEventConstructor;
-      if (!orientationEvent.requestPermission) {
+      const motionEvent = (window.DeviceMotionEvent ?? null) as DeviceMotionEventConstructor | null;
+      if (!orientationEvent.requestPermission && !motionEvent?.requestPermission) {
         bindGyro();
         return;
       }
 
       try {
+        gyroPermissionPending = true;
         setGyroStatus("陀螺仪：请求权限中");
-        const permission = await orientationEvent.requestPermission();
-        if (permission === "granted") {
+        const permissions: OrientationPermission[] = [];
+
+        if (orientationEvent.requestPermission) {
+          permissions.push(await orientationEvent.requestPermission());
+        }
+        if (motionEvent?.requestPermission) {
+          permissions.push(await motionEvent.requestPermission());
+        }
+
+        const granted = permissions.length > 0 && permissions.every((permission) => permission === "granted");
+        if (granted) {
           bindGyro();
         } else {
+          setCanEnableGyro(true);
           setGyroStatus("陀螺仪：权限被拒绝");
         }
       } catch (error) {
         console.error("陀螺仪权限请求失败：", error);
-        setGyroStatus("陀螺仪：请求失败");
+        setCanEnableGyro(true);
+        setGyroStatus("陀螺仪：请求失败，请点按钮重试");
+      } finally {
+        gyroPermissionPending = false;
       }
     };
+    activateGyroRef.current = () => {
+      void activateGyro();
+    };
+
+    setCanEnableGyro(mobile && typeof window.DeviceOrientationEvent !== "undefined");
 
     renderer.domElement.addEventListener("mousedown", onMouseDown);
     renderer.domElement.addEventListener("mousemove", onMouseMove);
@@ -452,6 +511,11 @@ export default function MonasteryViewer() {
       if (keys.a) camera.position.addScaledVector(right, currentMoveSpeed);
       if (keys.d) camera.position.addScaledVector(right, -currentMoveSpeed);
 
+      const verticalAxis = (risePressedRef.current ? 1 : 0) - (descendPressedRef.current ? 1 : 0);
+      if (verticalAxis !== 0) {
+        camera.position.y += currentMoveSpeed * verticalAxis;
+      }
+
       limitCameraHeight();
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(animate);
@@ -463,6 +527,7 @@ export default function MonasteryViewer() {
       window.cancelAnimationFrame(animationFrame);
       window.cancelAnimationFrame(loadProgressFrame);
       resetCameraRef.current = () => undefined;
+      activateGyroRef.current = () => undefined;
       renderer.domElement.removeEventListener("mousedown", onMouseDown);
       renderer.domElement.removeEventListener("mousemove", onMouseMove);
       renderer.domElement.removeEventListener("wheel", onWheel);
@@ -518,6 +583,14 @@ export default function MonasteryViewer() {
     }
   };
 
+  const setRisePressed = (pressed: boolean) => {
+    risePressedRef.current = pressed;
+  };
+
+  const setDescendPressed = (pressed: boolean) => {
+    descendPressedRef.current = pressed;
+  };
+
   return (
     <section className="viewer-shell" aria-label="修道院三维虚拟漫游">
       <div ref={canvasHostRef} className="viewer-canvas" />
@@ -532,6 +605,16 @@ export default function MonasteryViewer() {
       </button>
 
       {isMobileDevice && <div className="viewer-control gyro-status">{gyroStatus}</div>}
+
+      {isMobileDevice && canEnableGyro && (
+        <button
+          className="viewer-control gyro-button"
+          type="button"
+          onClick={() => activateGyroRef.current()}
+        >
+          启用陀螺仪
+        </button>
+      )}
 
       {!modelReady && (
         <div className="loading-status" data-error={loadFailed} role={loadFailed ? "alert" : "status"}>
@@ -582,22 +665,47 @@ export default function MonasteryViewer() {
       )}
 
       {isMobileDevice && (
-        <div
-          className="joystick"
-          aria-label="移动摇杆"
-          role="application"
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.currentTarget.setPointerCapture(event.pointerId);
-            updateJoystick(event);
-          }}
-          onPointerMove={(event) => {
-            if (event.currentTarget.hasPointerCapture(event.pointerId)) updateJoystick(event);
-          }}
-          onPointerUp={resetJoystick}
-          onPointerCancel={resetJoystick}
-        >
-          <div ref={joystickKnobRef} className="joystick-knob" />
+        <div className="mobile-flight-controls">
+          <div
+            className="joystick"
+            aria-label="移动摇杆"
+            role="application"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              updateJoystick(event);
+            }}
+            onPointerMove={(event) => {
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) updateJoystick(event);
+            }}
+            onPointerUp={resetJoystick}
+            onPointerCancel={resetJoystick}
+          >
+            <div ref={joystickKnobRef} className="joystick-knob" />
+          </div>
+
+          <div className="flight-buttons" aria-label="飞行升降控制">
+            <button
+              className="flight-button"
+              type="button"
+              onPointerDown={() => setRisePressed(true)}
+              onPointerUp={() => setRisePressed(false)}
+              onPointerCancel={() => setRisePressed(false)}
+              onPointerLeave={() => setRisePressed(false)}
+            >
+              上
+            </button>
+            <button
+              className="flight-button"
+              type="button"
+              onPointerDown={() => setDescendPressed(true)}
+              onPointerUp={() => setDescendPressed(false)}
+              onPointerCancel={() => setDescendPressed(false)}
+              onPointerLeave={() => setDescendPressed(false)}
+            >
+              下
+            </button>
+          </div>
         </div>
       )}
     </section>

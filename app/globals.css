@@ -91,6 +91,22 @@ button {
   user-select: none;
 }
 
+.gyro-button {
+  top: 52px;
+  right: 16px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gyro-button:hover {
+  background: rgb(0 0 0 / 58%);
+}
+
+.gyro-button:active {
+  background: rgb(0 0 0 / 70%);
+}
+
 .loading-status {
   position: absolute;
   top: 50%;
@@ -207,19 +223,51 @@ button {
   background: rgb(80 0 0 / 70%);
 }
 
-.joystick {
+.mobile-flight-controls {
   position: absolute;
   bottom: 28px;
   left: 50%;
   z-index: 10;
+  display: grid;
+  grid-template-columns: 160px auto;
+  align-items: center;
+  gap: 18px;
+  transform: translateX(-50%);
+}
+
+.joystick {
+  position: relative;
   width: 160px;
   height: 160px;
   border: 2px solid rgb(255 255 255 / 60%);
   border-radius: 50%;
   background: rgb(0 0 0 / 22%);
-  transform: translateX(-50%);
   touch-action: none;
   user-select: none;
+}
+
+.flight-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.flight-button {
+  min-width: 52px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 8px;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  backdrop-filter: blur(3px);
+  touch-action: none;
+  user-select: none;
+}
+
+.flight-button:active {
+  background: rgb(0 0 0 / 70%);
 }
 
 .joystick-knob {
@@ -236,9 +284,28 @@ button {
 }
 
 @media (orientation: landscape) {
-  .joystick {
-    bottom: 24px;
-    left: 28px;
+  .mobile-flight-controls {
+    inset: 0;
+    display: block;
     transform: none;
+    pointer-events: none;
+  }
+
+  .joystick {
+    position: absolute;
+    bottom: max(24px, env(safe-area-inset-bottom));
+    left: max(28px, env(safe-area-inset-left));
+    pointer-events: auto;
+  }
+
+  .flight-buttons {
+    position: absolute;
+    right: max(28px, env(safe-area-inset-right));
+    bottom: max(24px, env(safe-area-inset-bottom));
+    pointer-events: auto;
+  }
+
+  .flight-button {
+    min-width: 56px;
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
@@ -11,6 +11,8 @@ type MovementKeys = {
   d: boolean;
   shift: boolean;
 };
+
+type LoadStage = "初始化" | "下载模型" | "解析与场景构建" | "渲染就绪" | "加载失败";
 
 type OrientationPermission = "granted" | "denied";
 type DeviceOrientationEventConstructor = typeof DeviceOrientationEvent & {
@@ -109,9 +111,33 @@ export default function MonasteryViewer() {
   const joystickKnobRef = useRef<HTMLDivElement>(null);
   const [isMobileDevice, setIsMobileDevice] = useState(false);
   const [modelReady, setModelReady] = useState(false);
-  const [loadStatus, setLoadStatus] = useState("正在加载三维模型…");
+  const [loadStage, setLoadStage] = useState<LoadStage>("初始化");
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [decodeProgress, setDecodeProgress] = useState(0);
+  const [overallProgress, setOverallProgress] = useState(0);
+  const [loadLogs, setLoadLogs] = useState<string[]>(["初始化 Viewer 组件"]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [gyroStatus, setGyroStatus] = useState("陀螺仪：未启用");
+
+  const addLoadLog = useCallback((message: string) => {
+    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    setLoadLogs((logs) => [...logs, `${time} ${message}`].slice(-6));
+  }, []);
+
+  const updateLoadState = useCallback((
+    stage: LoadStage,
+    download: number,
+    decode: number,
+    message?: string,
+  ) => {
+    const nextDownload = Math.min(100, Math.max(0, download));
+    const nextDecode = Math.min(100, Math.max(0, decode));
+    setLoadStage(stage);
+    setDownloadProgress(nextDownload);
+    setDecodeProgress(nextDecode);
+    setOverallProgress(nextDownload * 0.7 + nextDecode * 0.3);
+    if (message) addLoadLog(message);
+  }, [addLoadLog]);
 
   useEffect(() => {
     const host = canvasHostRef.current;
@@ -153,6 +179,7 @@ export default function MonasteryViewer() {
     let gyroPitchOffset = 0;
     let disposed = false;
     let animationFrame = 0;
+    let loadProgressFrame = 0;
     const initialCameraPosition = new THREE.Vector3();
     let initialYaw = 0;
     let initialPitch = 0;
@@ -310,64 +337,97 @@ export default function MonasteryViewer() {
     fillLight.position.set(...VIEWER_CONFIG.lighting.fillPosition);
     scene.add(fillLight);
 
+    updateLoadState("初始化", 0, 0, "创建场景与相机");
+
     const loader = new GLTFLoader();
-    loader.load(
-      VIEWER_CONFIG.model.url,
-      (gltf) => {
-        const model = gltf.scene;
-        if (disposed) {
-          disposeObject(model);
+
+    const handleLoadedModel = (gltf: { scene: THREE.Group }) => {
+      const model = gltf.scene;
+      if (disposed) {
+        disposeObject(model);
+        return;
+      }
+
+      updateLoadState("解析与场景构建", 100, 70, "模型数据已下载，正在解析与构建场景");
+
+      const initialBox = new THREE.Box3().setFromObject(model);
+      const center = initialBox.getCenter(new THREE.Vector3());
+      model.position.sub(center);
+
+      // 居中后重新计算包围盒，保证地面高度与模型真实坐标一致。
+      const box = new THREE.Box3().setFromObject(model);
+      const size = box.getSize(new THREE.Vector3());
+      const centeredCenter = box.getCenter(new THREE.Vector3());
+      const maxDimension = Math.max(size.x, size.y, size.z);
+      floorMinY = box.min.y;
+
+      const eyeHeight = Math.max(
+        VIEWER_CONFIG.camera.eyeOffset + VIEWER_CONFIG.model.minimumEyeClearance,
+        size.y * VIEWER_CONFIG.model.eyeHeightRatio,
+      );
+      const viewDistance = maxDimension * VIEWER_CONFIG.model.viewDistanceRatio;
+      camera.position.set(
+        centeredCenter.x + VIEWER_CONFIG.model.cameraOffsetX,
+        floorMinY + eyeHeight + VIEWER_CONFIG.model.cameraOffsetY,
+        -(centeredCenter.z + viewDistance) + VIEWER_CONFIG.model.cameraOffsetZ,
+      );
+
+      const lookTarget = new THREE.Vector3(
+        centeredCenter.x + VIEWER_CONFIG.model.targetOffsetX,
+        floorMinY + size.y * VIEWER_CONFIG.model.targetHeightRatio,
+        centeredCenter.z + VIEWER_CONFIG.model.targetOffsetZ,
+      );
+      syncViewAnglesToTarget(lookTarget);
+      initialCameraPosition.copy(camera.position);
+      initialYaw = yaw;
+      initialPitch = pitch;
+      scene.add(model);
+
+      const parseStartedAt = performance.now();
+      const finishSceneBuild = (now: number) => {
+        if (disposed) return;
+
+        const elapsed = now - parseStartedAt;
+        const progress = Math.min(100, 70 + (elapsed / 900) * 30);
+        updateLoadState("解析与场景构建", 100, progress, progress >= 100 ? "场景构建完成，准备渲染" : undefined);
+
+        if (progress < 100) {
+          loadProgressFrame = window.requestAnimationFrame(finishSceneBuild);
           return;
         }
 
-        const initialBox = new THREE.Box3().setFromObject(model);
-        const center = initialBox.getCenter(new THREE.Vector3());
-        model.position.sub(center);
-
-        // 居中后重新计算包围盒，保证地面高度与模型真实坐标一致。
-        const box = new THREE.Box3().setFromObject(model);
-        const size = box.getSize(new THREE.Vector3());
-        const centeredCenter = box.getCenter(new THREE.Vector3());
-        const maxDimension = Math.max(size.x, size.y, size.z);
-        floorMinY = box.min.y;
-
-        const eyeHeight = Math.max(
-          VIEWER_CONFIG.camera.eyeOffset + VIEWER_CONFIG.model.minimumEyeClearance,
-          size.y * VIEWER_CONFIG.model.eyeHeightRatio,
-        );
-        const viewDistance = maxDimension * VIEWER_CONFIG.model.viewDistanceRatio;
-        camera.position.set(
-          centeredCenter.x + VIEWER_CONFIG.model.cameraOffsetX,
-          floorMinY + eyeHeight + VIEWER_CONFIG.model.cameraOffsetY,
-          -(centeredCenter.z + viewDistance) + VIEWER_CONFIG.model.cameraOffsetZ,
-        );
-
-        const lookTarget = new THREE.Vector3(
-          centeredCenter.x + VIEWER_CONFIG.model.targetOffsetX,
-          floorMinY + size.y * VIEWER_CONFIG.model.targetHeightRatio,
-          centeredCenter.z + VIEWER_CONFIG.model.targetOffsetZ,
-        );
-        syncViewAnglesToTarget(lookTarget);
-        initialCameraPosition.copy(camera.position);
-        initialYaw = yaw;
-        initialPitch = pitch;
-        scene.add(model);
-        setLoadStatus("模型加载完成");
+        updateLoadState("渲染就绪", 100, 100, "模型已加入场景，进入渲染就绪阶段");
         setModelReady(true);
-      },
-      (progress) => {
-        if (!disposed && progress.total > 0) {
-          const percent = ((progress.loaded / progress.total) * 100).toFixed(1);
-          setLoadStatus(`正在加载三维模型：${percent}%`);
-        }
-      },
-      (error) => {
-        if (disposed) return;
-        console.error("模型加载失败：", error);
-        setLoadFailed(true);
-        setLoadStatus("模型加载失败，请检查 public/models 中的 GLB 文件。");
-      },
-    );
+        setLoadFailed(false);
+      };
+
+      loadProgressFrame = window.requestAnimationFrame(finishSceneBuild);
+    };
+
+    const handleProgress = (progress: ProgressEvent<EventTarget>) => {
+      if (!disposed && progress.total > 0) {
+        const percent = (progress.loaded / progress.total) * 100;
+        updateLoadState("下载模型", percent, Math.min(35, percent * 0.35), `模型下载 ${percent.toFixed(1)}%`);
+      }
+    };
+
+    const loadModel = (url: string) => {
+      updateLoadState("下载模型", 0, 0, "开始下载模型");
+      loader.load(
+        url,
+        handleLoadedModel,
+        handleProgress,
+        (error) => {
+          if (disposed) return;
+
+          console.error("模型加载失败：", error);
+          setLoadFailed(true);
+          updateLoadState("加载失败", 0, 0, "模型加载失败，请检查 GLB 文件和服务器路径");
+        },
+      );
+    };
+
+    loadModel(VIEWER_CONFIG.model.url);
 
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
@@ -401,6 +461,7 @@ export default function MonasteryViewer() {
     return () => {
       disposed = true;
       window.cancelAnimationFrame(animationFrame);
+      window.cancelAnimationFrame(loadProgressFrame);
       resetCameraRef.current = () => undefined;
       renderer.domElement.removeEventListener("mousedown", onMouseDown);
       renderer.domElement.removeEventListener("mousemove", onMouseMove);
@@ -417,7 +478,7 @@ export default function MonasteryViewer() {
       renderer.forceContextLoss();
       renderer.domElement.remove();
     };
-  }, []);
+  }, [updateLoadState]);
 
   const updateJoystick = (event: ReactPointerEvent<HTMLDivElement>) => {
     const joystick = event.currentTarget;
@@ -474,7 +535,49 @@ export default function MonasteryViewer() {
 
       {!modelReady && (
         <div className="loading-status" data-error={loadFailed} role={loadFailed ? "alert" : "status"}>
-          {loadStatus}
+          <div className="loading-kicker">三维模型加载中</div>
+          <div className="loading-heading">
+            <strong>{loadStage}</strong>
+            <span>{loadFailed ? "需要检查" : "请稍候"}</span>
+          </div>
+
+          <div className="loading-log" aria-label="模型加载日志">
+            {loadLogs.map((log, index) => (
+              <div key={`${log}-${index}`}>{log}</div>
+            ))}
+          </div>
+
+          {!loadFailed && (
+            <>
+              <div className="loading-progress-row">
+                <span>模型下载</span>
+                <strong>{downloadProgress.toFixed(1)}%</strong>
+              </div>
+              <div
+                className="loading-progress-track"
+                role="progressbar"
+                aria-label="模型下载进度"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={downloadProgress}
+              >
+                <div className="loading-progress-bar" style={{ width: `${downloadProgress}%` }} />
+              </div>
+
+              <div className="loading-progress-row loading-decode-row">
+                <span>解析与场景构建</span>
+                <strong>{decodeProgress.toFixed(1)}%</strong>
+              </div>
+              <div className="loading-progress-track loading-decode-track">
+                <div className="loading-progress-bar" style={{ width: `${decodeProgress}%` }} />
+              </div>
+
+              <div className="loading-overall-row">
+                <span>总体进度（估算）</span>
+                <strong>{overallProgress.toFixed(0)}%</strong>
+              </div>
+            </>
+          )}
         </div>
       )}
 

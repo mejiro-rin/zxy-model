@@ -96,16 +96,110 @@ button {
   top: 50%;
   left: 50%;
   z-index: 9;
-  max-width: min(88vw, 420px);
-  padding: 10px 14px;
+  width: min(88vw, 390px);
+  padding: 16px 18px;
   border: 1px solid rgb(255 255 255 / 55%);
-  border-radius: 6px;
-  background: rgb(0 0 0 / 52%);
+  border-radius: 10px;
+  background: rgb(8 20 28 / 78%);
   color: #fff;
   font-size: 14px;
-  text-align: center;
+  text-align: left;
   transform: translate(-50%, -50%);
   backdrop-filter: blur(4px);
+}
+
+.loading-kicker {
+  color: rgb(191 233 255 / 72%);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.loading-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.loading-heading strong {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.loading-heading span {
+  color: rgb(255 255 255 / 58%);
+  font-size: 11px;
+}
+
+.loading-log {
+  max-height: 86px;
+  margin-top: 10px;
+  overflow: hidden;
+  color: rgb(255 255 255 / 66%);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.loading-log div:not(:last-child) {
+  opacity: 0.7;
+}
+
+.loading-progress-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.loading-progress-row span {
+  color: rgb(255 255 255 / 72%);
+}
+
+.loading-progress-row strong {
+  color: #bfe9ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.loading-progress-track {
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 20%);
+}
+
+.loading-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: #bfe9ff;
+  transition: width 160ms ease-out;
+}
+
+.loading-decode-row {
+  margin-top: 10px;
+}
+
+.loading-decode-track .loading-progress-bar {
+  background: #8bd8c7;
+}
+
+.loading-overall-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgb(255 255 255 / 14%);
+  color: rgb(255 255 255 / 72%);
+  font-size: 12px;
+}
+
+.loading-overall-row strong {
+  color: #fff;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
 }
 
 .loading-status[data-error="true"] {

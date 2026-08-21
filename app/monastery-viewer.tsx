@@ -92,7 +92,7 @@ const MODEL_CONFIGS = {
 } as const;
 
 // 当前加载的模型名称（MODEL_CONFIGS 的键名），初始化时按此名称取用对应配置。
-const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "parliament2";
+const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "palace_of_the_counts_of_barcelos";
 
 type ModelConfig = (typeof MODEL_CONFIGS)[keyof typeof MODEL_CONFIGS];
 const getModelConfig = (name: keyof typeof MODEL_CONFIGS): ModelConfig => MODEL_CONFIGS[name];
@@ -680,7 +680,7 @@ export default function MonasteryViewer() {
       );
     };
 
-    loadModel(modelConfig.url);
+    loadModel(`${MODEL_SOURCE_BASE}${modelConfig.url}`);
 
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();

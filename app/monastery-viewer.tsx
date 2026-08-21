@@ -62,7 +62,7 @@ const VIEWER_CONFIG = {
     fillPosition: [-40, 60, -40] as const, // 补光位置，用于照亮建筑背面。
   },
   model: {
-    url: "/models/PARLIAMENT%202.glb", // public 目录下的 GLB 模型访问路径。
+    url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
     eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
     minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
     viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。

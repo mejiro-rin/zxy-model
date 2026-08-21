@@ -37,7 +37,7 @@ const VIEWER_CONFIG = {
     initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
     initialPitch: -0.4, // 模型加载前的初始俯视角，单位为弧度。
     maxPitch: Math.PI / 2.2, // 上下转头的最大角度，防止镜头完全翻转。
-    eyeOffset: 18, // 相机距离模型地面的最低高度，防止穿入地下。
+    eyeOffset: -300, // 相机距离模型地面的最低高度，防止穿入地下。
   },
   movement: {
     desktopSpeed: 0.07, // 电脑端 WASD 每帧移动速度。
@@ -62,7 +62,8 @@ const VIEWER_CONFIG = {
     fillPosition: [-40, 60, -40] as const, // 补光位置，用于照亮建筑背面。
   },
   model: {
-    url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
+    // url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
+    url: "/models/temp/palace_of_the_counts_of_barcelos.glb", // public 目录下的 GLB 模型访问路径。
     eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
     minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
     viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。

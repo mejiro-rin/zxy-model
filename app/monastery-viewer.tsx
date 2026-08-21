@@ -31,32 +31,6 @@ type DeviceMotionEventConstructor = typeof DeviceMotionEvent & {
 //  再在 ACTIVE_MODEL_NAME 切换当前加载的模型。
 // ============================================
 const MODEL_CONFIGS = {
-  palace_of_the_counts_of_barcelos: {
-    // 与模型文件名一致的配置对象键名。
-    url: "/models/palace_of_the_counts_of_barcelos.glb", // public 目录下的 GLB 模型访问路径。
-    displayName: "巴塞洛斯伯爵宫", // 模型显示名称。
-    scale: 5, // 模型渲染缩放比例
-    camera: {
-      initialPosition: [0, 0, 100] as const, // 模型加载前的临时相机位置，贴近模型原点。
-      initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
-      eyeOffset: -200, // 相机距离模型地面的最低安全高度，防止穿入地下。
-      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
-      minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
-      viewDistanceRatio: 0.35, // 初始相机到模型原点（居中后即坐标原点）的距离占模型最大尺寸的比例。
-      cameraOffsetX: -1, // 初始相机相对原点的 X 偏移，带来一点侧向透视。
-      cameraOffsetY: 1.69, // 初始相机相对计算高度的 Y 偏移。
-      cameraOffsetZ: -2.1, // 初始相机相对计算距离的 Z 偏移。
-      targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
-      targetHeightRatio: 0.25, // 初始视线目标高度占模型高度的比例。
-      targetOffsetZ: 0, // 初始视线目标相对模型中心的 Z 偏移。
-    },
-    movement: {
-      desktopSpeed: 0.07, // 电脑端 WASD 每帧移动速度。
-      mobileSpeed: 0.09, // 手机端摇杆每帧基础移动速度。
-      verticalSpeed: 0.07, // 电脑端上下飞行每帧移动速度。
-      mobileVerticalSpeed: 0.09, // 手机端上下飞行每帧基础移动速度。
-    },
-  },
   parliament2: {
     url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
     displayName: "议会大厦", // 模型显示名称。
@@ -82,17 +56,60 @@ const MODEL_CONFIGS = {
       mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
     },
   },
-  // 后续新增模型时，在此复制一份以上配置，例如：
-  // my_new_model: {
-  //   url: "/models/my_new_model.glb",
-  //   displayName: "新模型",
-  //   camera: { ... },
-  //   movement: { ... },
-  // },
+  stp_stourton: {
+    url: "/models/stp_stourton.glb",
+    displayName: "圣彼得教堂",
+    scale: 2,
+    camera: {
+      initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
+      initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
+      eyeOffset: 3.5, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
+      minimumEyeClearance: 0, // 初始相机高于最低安全高度的额外距离。
+      viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
+      cameraOffsetX: 3.7, // 初始相机相对模型中心的 X 偏移。
+      cameraOffsetY: 0, // 初始相机相对计算高度的 Y 偏移。
+      cameraOffsetZ: -12, // 初始相机相对计算距离的 Z 偏移。
+      targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
+      targetHeightRatio: 0.2, // 初始视线目标高度占模型高度的比例。
+      targetOffsetZ: -120, // 初始视线目标相对模型中心的 Z 偏移。
+    },
+    movement: {
+      desktopSpeed: 0.10, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.12, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
+    },
+  },
+  stb_the_less: {
+    url: "/models/stb_the_less.glb",
+    displayName: "伦敦史密斯菲尔德教堂",
+    scale: 1.5,
+    camera: {
+      initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
+      initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
+      eyeOffset: 4, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
+      minimumEyeClearance: 0, // 初始相机高于最低安全高度的额外距离。
+      viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
+      cameraOffsetX: 2, // 初始相机相对模型中心的 X 偏移。
+      cameraOffsetY: 0, // 初始相机相对计算高度的 Y 偏移。
+      cameraOffsetZ: -24.5, // 初始相机相对计算距离的 Z 偏移。
+      targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
+      targetHeightRatio: 0.21, // 初始视线目标高度占模型高度的比例。
+      targetOffsetZ: 0, // 初始视线目标相对模型中心的 Z 偏移。
+    },
+    movement: {
+      desktopSpeed: 0.10, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.12, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
+    },
+  },
 } as const;
 
 // 当前加载的模型名称（MODEL_CONFIGS 的键名），初始化时按此名称取用对应配置。
-const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "parliament2";
+const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "stb_the_less";
 
 type ModelConfig = (typeof MODEL_CONFIGS)[keyof typeof MODEL_CONFIGS];
 const getModelConfig = (name: keyof typeof MODEL_CONFIGS): ModelConfig => MODEL_CONFIGS[name];
@@ -680,7 +697,7 @@ export default function MonasteryViewer() {
       );
     };
 
-    loadModel(modelConfig.url);
+    loadModel(`${MODEL_SOURCE_BASE}${modelConfig.url}`);
 
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();

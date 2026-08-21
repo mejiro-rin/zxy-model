@@ -5,4 +5,4 @@
 export const MODEL_SOURCE_BASE =
   process.env.NODE_ENV === "development"
     ? ""
-    : "https://raw.githubusercontent.com/mejiro-rin/zxy-model/refs/heads/main/public";
+    : "https://gh-proxy.com/https://raw.githubusercontent.com/mejiro-rin/zxy-model/refs/heads/main/public";

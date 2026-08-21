@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MODEL_SOURCE_BASE } from "./model-source";
 
 type MovementKeys = {
   w: boolean;
@@ -25,7 +26,78 @@ type DeviceMotionEventConstructor = typeof DeviceMotionEvent & {
 // ============================================
 //  漫游调参区
 //  修改操作手感、相机、灯光或初始视角时，优先只调整这里。
+//  每个模型一个配置对象（对象名与模型文件名一致），
+//  新增模型时复制一份 MODEL_CONFIGS 中的条目并修改 url 与参数即可，
+//  再在 ACTIVE_MODEL_NAME 切换当前加载的模型。
 // ============================================
+const MODEL_CONFIGS = {
+  palace_of_the_counts_of_barcelos: {
+    // 与模型文件名一致的配置对象键名。
+    url: "/models/palace_of_the_counts_of_barcelos.glb", // public 目录下的 GLB 模型访问路径。
+    displayName: "巴塞洛斯伯爵宫", // 模型显示名称。
+    scale: 5, // 模型渲染缩放比例
+    camera: {
+      initialPosition: [0, 0, 100] as const, // 模型加载前的临时相机位置，贴近模型原点。
+      initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
+      eyeOffset: -200, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
+      minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
+      viewDistanceRatio: 0.35, // 初始相机到模型原点（居中后即坐标原点）的距离占模型最大尺寸的比例。
+      cameraOffsetX: -1, // 初始相机相对原点的 X 偏移，带来一点侧向透视。
+      cameraOffsetY: 1.69, // 初始相机相对计算高度的 Y 偏移。
+      cameraOffsetZ: -2.1, // 初始相机相对计算距离的 Z 偏移。
+      targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
+      targetHeightRatio: 0.25, // 初始视线目标高度占模型高度的比例。
+      targetOffsetZ: 0, // 初始视线目标相对模型中心的 Z 偏移。
+    },
+    movement: {
+      desktopSpeed: 0.07, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.09, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.07, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.09, // 手机端上下飞行每帧基础移动速度。
+    },
+  },
+  parliament2: {
+    url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
+    displayName: "议会大厦", // 模型显示名称。
+    scale: 1, // 模型渲染缩放比例；1 表示不缩放。
+    camera: {
+      initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
+      initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
+      eyeOffset: 18, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
+      minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
+      viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
+      cameraOffsetX: -55, // 初始相机相对模型中心的 X 偏移。
+      cameraOffsetY: -10, // 初始相机相对计算高度的 Y 偏移。
+      cameraOffsetZ: -400, // 初始相机相对计算距离的 Z 偏移。
+      targetOffsetX: 400, // 初始视线目标相对模型中心的 X 偏移。
+      targetHeightRatio: 0.2, // 初始视线目标高度占模型高度的比例。
+      targetOffsetZ: -100, // 初始视线目标相对模型中心的 Z 偏移。
+    },
+    movement: {
+      desktopSpeed: 0.15, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.15, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
+    },
+  },
+  // 后续新增模型时，在此复制一份以上配置，例如：
+  // my_new_model: {
+  //   url: "/models/my_new_model.glb",
+  //   displayName: "新模型",
+  //   camera: { ... },
+  //   movement: { ... },
+  // },
+} as const;
+
+// 当前加载的模型名称（MODEL_CONFIGS 的键名），初始化时按此名称取用对应配置。
+const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "parliament2";
+
+type ModelConfig = (typeof MODEL_CONFIGS)[keyof typeof MODEL_CONFIGS];
+const getModelConfig = (name: keyof typeof MODEL_CONFIGS): ModelConfig => MODEL_CONFIGS[name];
+
+// 全局通用配置（不随模型变化的参数）。
 const VIEWER_CONFIG = {
   scene: {
     backgroundColor: 0xc8dae6, // 场景背景色。
@@ -34,14 +106,9 @@ const VIEWER_CONFIG = {
     fieldOfView: 75, // 相机视野角度；数值越大，看到的范围越广。
     nearPlane: 0.1, // 最近可见距离；过大会裁掉贴近相机的物体。
     farPlane: 2000, // 最远可见距离；需要覆盖整个模型。
-    initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
-    initialPitch: -0.4, // 模型加载前的初始俯视角，单位为弧度。
     maxPitch: Math.PI / 2.2, // 上下转头的最大角度，防止镜头完全翻转。
-    eyeOffset: 18, // 相机距离模型地面的最低高度，防止穿入地下。
   },
   movement: {
-    desktopSpeed: 0.07, // 电脑端 WASD 每帧移动速度。
-    mobileSpeed: 0.09, // 手机端摇杆每帧基础移动速度。
     boostMultiplier: 2.5, // Shift 或摇杆推满时的最高加速倍数。
     mouseLookSensitivity: 0.0015, // 鼠标拖拽转向灵敏度；越大转动越快。
     wheelHeightSensitivity: 0.08, // 鼠标滚轮升降灵敏度；越大升降越快。
@@ -61,23 +128,20 @@ const VIEWER_CONFIG = {
     fillIntensity: 3, // 补光强度。
     fillPosition: [-40, 60, -40] as const, // 补光位置，用于照亮建筑背面。
   },
-  model: {
-    url: "/models/PARLIAMENT2.glb", // public 目录下的 GLB 模型访问路径。
-    eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
-    minimumEyeClearance: 0.4, // 初始相机高于最低安全高度的额外距离。
-    viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
-    cameraOffsetX: -55, // 初始相机相对模型中心的 X 偏移。
-    cameraOffsetY: -4, // 初始相机相对计算高度的 Y 偏移。
-    cameraOffsetZ: 50, // 初始相机相对计算距离的 Z 偏移。
-    targetOffsetX: 400, // 初始视线目标相对模型中心的 X 偏移。
-    targetHeightRatio: 0.2, // 初始视线目标高度占模型高度的比例。
-    targetOffsetZ: -100, // 初始视线目标相对模型中心的 Z 偏移。
-  },
   joystick: {
     radius: 48, // 摇杆圆点允许移动的最大半径，单位为像素。
     deadZone: 0.18, // 摇杆死区比例，避免轻微触碰导致误移动。
   },
+  collision: {
+    enabled: true, // 是否启用碰撞体积（基于模型三角面构建的网格）。
+    cellSize: 8, // 碰撞网格单元大小，越小精度越高、构建越慢。
+    radius: 1.2, // 相机碰撞半径，越大越容易被墙体阻挡。
+    wallNormalMax: 0.5, // 仅近似垂直（墙体类）的三角面参与横向碰撞，避免地面挡路。
+  },
 } as const;
+
+// 组件内统一使用当前模型配置（初始化时按模型名称加载）。
+const modelConfig = getModelConfig(ACTIVE_MODEL_NAME);
 
 const createMovementKeys = (): MovementKeys => ({
   w: false,
@@ -89,6 +153,128 @@ const createMovementKeys = (): MovementKeys => ({
 
 function isMovementKey(key: string): key is keyof MovementKeys {
   return key === "w" || key === "s" || key === "a" || key === "d" || key === "shift";
+}
+
+// 基于模型三角面构建的均匀网格碰撞体。
+// 构建时把每个三角形按包围盒写入其经过的网格单元，
+// 查询时只检测相机附近网格单元中的三角面，避免每帧对全模型做射线检测。
+class CollisionGrid {
+  private readonly cellSize: number;
+  private readonly cells = new Map<string, number[]>();
+  private readonly triangles: Float32Array;
+  private readonly tempA = new THREE.Vector3();
+  private readonly tempB = new THREE.Vector3();
+  private readonly tempC = new THREE.Vector3();
+  private readonly tempTriangle = new THREE.Triangle();
+  private readonly tempClosest = new THREE.Vector3();
+
+  constructor(root: THREE.Object3D, cellSize: number) {
+    this.cellSize = cellSize;
+    root.updateMatrixWorld(true);
+
+    const flat: number[] = [];
+    const va = new THREE.Vector3();
+    const vb = new THREE.Vector3();
+    const vc = new THREE.Vector3();
+    const edge1 = new THREE.Vector3();
+    const edge2 = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      const position = mesh.geometry?.getAttribute?.("position");
+      if (!position) return;
+      const index = mesh.geometry.getIndex();
+      const triCount = index ? index.count / 3 : position.count / 3;
+      const matrix = mesh.matrixWorld;
+
+      for (let i = 0; i < triCount; i++) {
+        const ia = index ? index.getX(i * 3) : i * 3;
+        const ib = index ? index.getX(i * 3 + 1) : i * 3 + 1;
+        const ic = index ? index.getX(i * 3 + 2) : i * 3 + 2;
+        va.set(position.getX(ia), position.getY(ia), position.getZ(ia)).applyMatrix4(matrix);
+        vb.set(position.getX(ib), position.getY(ib), position.getZ(ib)).applyMatrix4(matrix);
+        vc.set(position.getX(ic), position.getY(ic), position.getZ(ic)).applyMatrix4(matrix);
+        edge1.subVectors(vb, va);
+        edge2.subVectors(vc, va);
+        normal.crossVectors(edge1, edge2).normalize();
+        flat.push(va.x, va.y, va.z, vb.x, vb.y, vb.z, vc.x, vc.y, vc.z, normal.x, normal.y, normal.z);
+      }
+    });
+
+    this.triangles = new Float32Array(flat);
+    const triCount = this.triangles.length / 12;
+
+    for (let t = 0; t < triCount; t++) {
+      const o = t * 12;
+      let minX = Infinity;
+      let minY = Infinity;
+      let minZ = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      let maxZ = -Infinity;
+      for (let v = 0; v < 3; v++) {
+        const x = this.triangles[o + v * 3];
+        const y = this.triangles[o + v * 3 + 1];
+        const z = this.triangles[o + v * 3 + 2];
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minY = Math.min(minY, y);
+        maxY = Math.max(maxY, y);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+      }
+      const ix0 = Math.floor(minX / cellSize);
+      const ix1 = Math.floor(maxX / cellSize);
+      const iy0 = Math.floor(minY / cellSize);
+      const iy1 = Math.floor(maxY / cellSize);
+      const iz0 = Math.floor(minZ / cellSize);
+      const iz1 = Math.floor(maxZ / cellSize);
+      for (let ix = ix0; ix <= ix1; ix++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+          for (let iz = iz0; iz <= iz1; iz++) {
+            const key = `${ix},${iy},${iz}`;
+            const list = this.cells.get(key);
+            if (list) list.push(t);
+            else this.cells.set(key, [t]);
+          }
+        }
+      }
+    }
+  }
+
+  // 检测目标点是否贴近墙体类三角面（仅横向碰撞用）。
+  isLateralBlocked(moved: THREE.Vector3, radius: number, wallNormalMax: number): boolean {
+    const cell = this.cellSize;
+    const ix0 = Math.floor((moved.x - radius) / cell);
+    const ix1 = Math.floor((moved.x + radius) / cell);
+    const iy0 = Math.floor((moved.y - radius) / cell);
+    const iy1 = Math.floor((moved.y + radius) / cell);
+    const iz0 = Math.floor((moved.z - radius) / cell);
+    const iz1 = Math.floor((moved.z + radius) / cell);
+    const radiusSq = radius * radius;
+
+    for (let ix = ix0; ix <= ix1; ix++) {
+      for (let iy = iy0; iy <= iy1; iy++) {
+        for (let iz = iz0; iz <= iz1; iz++) {
+          const list = this.cells.get(`${ix},${iy},${iz}`);
+          if (!list) continue;
+          for (const t of list) {
+            const o = t * 12;
+            if (Math.abs(this.triangles[o + 11]) > wallNormalMax) continue;
+            this.tempA.set(this.triangles[o], this.triangles[o + 1], this.triangles[o + 2]);
+            this.tempB.set(this.triangles[o + 3], this.triangles[o + 4], this.triangles[o + 5]);
+            this.tempC.set(this.triangles[o + 6], this.triangles[o + 7], this.triangles[o + 8]);
+            this.tempTriangle.set(this.tempA, this.tempB, this.tempC);
+            this.tempTriangle.closestPointToPoint(moved, this.tempClosest);
+            if (this.tempClosest.distanceToSquared(moved) < radiusSq) return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
 }
 
 function disposeObject(root: THREE.Object3D) {
@@ -164,7 +350,7 @@ export default function MonasteryViewer() {
       VIEWER_CONFIG.camera.nearPlane,
       VIEWER_CONFIG.camera.farPlane,
     );
-    camera.position.set(...VIEWER_CONFIG.camera.initialPosition);
+    camera.position.set(...(modelConfig.camera.initialPosition as [number, number, number]));
 
     const renderer = new THREE.WebGLRenderer({ antialias: VIEWER_CONFIG.renderer.antialias });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -176,8 +362,9 @@ export default function MonasteryViewer() {
 
     const keys = keysRef.current;
     let floorMinY = 0;
+    let collisionGrid: CollisionGrid | null = null;
     let yaw = 0;
-    let pitch: number = VIEWER_CONFIG.camera.initialPitch;
+    let pitch: number = modelConfig.camera.initialPitch;
     let isMouseDown = false;
     let useGyro = false;
     let gyroReady = false;
@@ -211,7 +398,7 @@ export default function MonasteryViewer() {
     };
 
     const limitCameraHeight = () => {
-      camera.position.y = Math.max(camera.position.y, floorMinY + VIEWER_CONFIG.camera.eyeOffset);
+      camera.position.y = Math.max(camera.position.y, floorMinY + modelConfig.camera.eyeOffset);
     };
 
     const resetCamera = () => {
@@ -409,6 +596,9 @@ export default function MonasteryViewer() {
 
       updateLoadState("解析与场景构建", 100, 70, "模型数据已下载，正在解析与构建场景");
 
+      // 按模型配置缩放后再居中，使包围盒计算与相机参数基于缩放后的尺寸。
+      model.scale.setScalar(modelConfig.scale);
+
       const initialBox = new THREE.Box3().setFromObject(model);
       const center = initialBox.getCenter(new THREE.Vector3());
       model.position.sub(center);
@@ -421,26 +611,30 @@ export default function MonasteryViewer() {
       floorMinY = box.min.y;
 
       const eyeHeight = Math.max(
-        VIEWER_CONFIG.camera.eyeOffset + VIEWER_CONFIG.model.minimumEyeClearance,
-        size.y * VIEWER_CONFIG.model.eyeHeightRatio,
+        modelConfig.camera.eyeOffset + modelConfig.camera.minimumEyeClearance,
+        size.y * modelConfig.camera.eyeHeightRatio,
       );
-      const viewDistance = maxDimension * VIEWER_CONFIG.model.viewDistanceRatio;
+      const viewDistance = maxDimension * modelConfig.camera.viewDistanceRatio;
       camera.position.set(
-        centeredCenter.x + VIEWER_CONFIG.model.cameraOffsetX,
-        floorMinY + eyeHeight + VIEWER_CONFIG.model.cameraOffsetY,
-        -(centeredCenter.z + viewDistance) + VIEWER_CONFIG.model.cameraOffsetZ,
+        centeredCenter.x + modelConfig.camera.cameraOffsetX,
+        floorMinY + eyeHeight + modelConfig.camera.cameraOffsetY,
+        centeredCenter.z + viewDistance + modelConfig.camera.cameraOffsetZ,
       );
 
       const lookTarget = new THREE.Vector3(
-        centeredCenter.x + VIEWER_CONFIG.model.targetOffsetX,
-        floorMinY + size.y * VIEWER_CONFIG.model.targetHeightRatio,
-        centeredCenter.z + VIEWER_CONFIG.model.targetOffsetZ,
+        centeredCenter.x + modelConfig.camera.targetOffsetX,
+        floorMinY + size.y * modelConfig.camera.targetHeightRatio,
+        centeredCenter.z + modelConfig.camera.targetOffsetZ,
       );
       syncViewAnglesToTarget(lookTarget);
       initialCameraPosition.copy(camera.position);
       initialYaw = yaw;
       initialPitch = pitch;
       scene.add(model);
+      model.updateMatrixWorld(true);
+      if (VIEWER_CONFIG.collision.enabled) {
+        collisionGrid = new CollisionGrid(model, VIEWER_CONFIG.collision.cellSize);
+      }
 
       const parseStartedAt = performance.now();
       const finishSceneBuild = (now: number) => {
@@ -486,17 +680,25 @@ export default function MonasteryViewer() {
       );
     };
 
-    loadModel(VIEWER_CONFIG.model.url);
+    loadModel(modelConfig.url);
 
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
     const animate = () => {
-      const currentMoveSpeed = mobile
-        ? VIEWER_CONFIG.movement.mobileSpeed *
-          (1 +
-            joystickStrengthRef.current * (VIEWER_CONFIG.movement.boostMultiplier - 1))
-        : VIEWER_CONFIG.movement.desktopSpeed *
-          (keys.shift ? VIEWER_CONFIG.movement.boostMultiplier : 1);
+      const speedMultiplier = mobile
+        ? 1 + joystickStrengthRef.current * (VIEWER_CONFIG.movement.boostMultiplier - 1)
+        : keys.shift
+          ? VIEWER_CONFIG.movement.boostMultiplier
+          : 1;
+
+      const currentMoveSpeed =
+        (mobile ? modelConfig.movement.mobileSpeed : modelConfig.movement.desktopSpeed) *
+        speedMultiplier;
+      const currentVerticalSpeed =
+        (mobile
+          ? modelConfig.movement.mobileVerticalSpeed
+          : modelConfig.movement.verticalSpeed) *
+        speedMultiplier;
 
       camera.rotation.order = "YXZ";
       camera.rotation.y = yaw;
@@ -506,14 +708,23 @@ export default function MonasteryViewer() {
       forward.normalize();
       right.crossVectors(camera.up, forward).normalize();
 
-      if (keys.w) camera.position.addScaledVector(forward, currentMoveSpeed);
-      if (keys.s) camera.position.addScaledVector(forward, -currentMoveSpeed);
-      if (keys.a) camera.position.addScaledVector(right, currentMoveSpeed);
-      if (keys.d) camera.position.addScaledVector(right, -currentMoveSpeed);
+      const lateralDelta = new THREE.Vector3();
+      if (keys.w) lateralDelta.addScaledVector(forward, currentMoveSpeed);
+      if (keys.s) lateralDelta.addScaledVector(forward, -currentMoveSpeed);
+      if (keys.a) lateralDelta.addScaledVector(right, currentMoveSpeed);
+      if (keys.d) lateralDelta.addScaledVector(right, -currentMoveSpeed);
+
+      if (lateralDelta.lengthSq() > 0) {
+        const moved = camera.position.clone().add(lateralDelta);
+        const blocked =
+          collisionGrid !== null &&
+          collisionGrid.isLateralBlocked(moved, VIEWER_CONFIG.collision.radius, VIEWER_CONFIG.collision.wallNormalMax);
+        if (!blocked) camera.position.copy(moved);
+      }
 
       const verticalAxis = (risePressedRef.current ? 1 : 0) - (descendPressedRef.current ? 1 : 0);
       if (verticalAxis !== 0) {
-        camera.position.y += currentMoveSpeed * verticalAxis;
+        camera.position.y += currentVerticalSpeed * verticalAxis;
       }
 
       limitCameraHeight();

@@ -55,6 +55,7 @@ const MODEL_CONFIGS = {
       verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
       mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
     },
+    infoPoints: [],
   },
   stp_stourton: {
     url: "/models/stp_stourton.glb",
@@ -80,6 +81,7 @@ const MODEL_CONFIGS = {
       verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
       mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
     },
+    infoPoints: [],
   },
   stb_the_less: {
     url: "/models/stb_the_less.glb",
@@ -105,6 +107,49 @@ const MODEL_CONFIGS = {
       verticalSpeed: 0.12, // 电脑端上下飞行每帧移动速度。
       mobileVerticalSpeed: 0.12, // 手机端上下飞行每帧基础移动速度。
     },
+    // 场景信息点：相机靠近后在地面上出现为可点击按钮，点击弹出介绍文本。
+    // position 为模型居中、缩放后的世界坐标；nearDistance 内完全显示，farDistance 外完全隐藏。
+    infoPoints: [
+      {
+        key: "dome",
+        label: "穹顶",
+        title: "八边形穹顶",
+        position: [-5, 6.4, 0],
+        nearDistance: 16,
+        farDistance: 17,
+        content:
+          "伦敦唯一保留至今的八边形教堂穹顶。木构骨架从中央升起，覆以铅皮，光线从顶部天窗洒入中殿。1793年乔治·丹斯主持重建时保留了这一独特结构，站在下方抬头，几何线条向中心汇聚，空间不大但高度足够，是整座教堂最安静的一角。",
+      },
+      {
+        key: "church",
+        label: "教堂",
+        title: "圣巴塞洛缪少教堂",
+        position: [-5, -6.5, 0],
+        nearDistance: 10,
+        farDistance: 17,
+        content:
+          "1123年首有记录，15世纪起建，经乔治·丹斯于1793、1823年两次重建。它嵌在圣巴塞洛缪医院庭院内，是伦敦少数仍留在院墙里的城市教堂。砖石立面、尖拱窗棂，与隔壁更古老的St Bartholomew-the-Great相比，它低调得多，但八边形穹顶和医院数百年的记忆让它有自己的分量。",
+      },
+      {
+        key: "organ",
+        label: "风琴",
+        title: "管风琴",
+        position: [4.1, -2.5, 0],
+        nearDistance: 10,
+        farDistance: 16,
+        content:
+          "教堂的管风琴，礼拜时的声音来源。具体年代不确定，但声音应该和这空间一样，不大却够清晰。",
+      },
+      {
+        key: "altar",
+        label: "祭坛",
+        title: "祭坛区域",
+        position: [-15.5, -5.4, 0],
+        nearDistance: 8,
+        farDistance: 16,
+        content: "教堂的祭坛，宗教仪式的中心。大理石台面承载着900年的历史。后方的彩色玻璃窗在阳光下投射出圣洁的光芒。两侧墙壁上密布的纪念碑记录了历代医学界名人和慈善家的故事。"
+      }
+    ],
   },
 } as const;
 
@@ -113,6 +158,17 @@ const ACTIVE_MODEL_NAME: keyof typeof MODEL_CONFIGS = "stb_the_less";
 
 type ModelConfig = (typeof MODEL_CONFIGS)[keyof typeof MODEL_CONFIGS];
 const getModelConfig = (name: keyof typeof MODEL_CONFIGS): ModelConfig => MODEL_CONFIGS[name];
+
+// 场景信息点：显示为可点击按钮，点击后打开介绍面板。
+type InfoPoint = {
+  key: string;
+  label: string;
+  title: string;
+  position: readonly [number, number, number];
+  nearDistance: number;
+  farDistance: number;
+  content: string;
+};
 
 // 全局通用配置（不随模型变化的参数）。
 const VIEWER_CONFIG = {
@@ -169,6 +225,7 @@ const VIEWER_CONFIG = {
 
 // 组件内统一使用当前模型配置（初始化时按模型名称加载）。
 const modelConfig = getModelConfig(ACTIVE_MODEL_NAME);
+const infoPoints: readonly InfoPoint[] = modelConfig.infoPoints;
 
 const createMovementKeys = (): MovementKeys => ({
   w: false,
@@ -428,6 +485,8 @@ export default function MonasteryViewer() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [gyroStatus, setGyroStatus] = useState("陀螺仪：未启用");
   const [canEnableGyro, setCanEnableGyro] = useState(false);
+  const [activeInfo, setActiveInfo] = useState<InfoPoint | null>(null);
+  const infoMarkerRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   const addLoadLog = useCallback((message: string) => {
     const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
@@ -861,6 +920,43 @@ export default function MonasteryViewer() {
       VIEWER_CONFIG.collision.halfHeight,
       VIEWER_CONFIG.collision.halfDepth,
     );
+
+    // 投影信息点到屏幕坐标，并按相机距离控制按钮显隐与透明度。
+    const markerPosition = new THREE.Vector3();
+    const markerProjection = new THREE.Vector3();
+    const updateMarkers = () => {
+      if (infoPoints.length === 0) return;
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      for (const point of infoPoints) {
+        const el = infoMarkerRefs.current[point.key];
+        if (!el) continue;
+        markerPosition.set(...point.position);
+        const dist = camera.position.distanceTo(markerPosition);
+        const fade = point.farDistance - point.nearDistance > 0
+          ? (point.farDistance - dist) / (point.farDistance - point.nearDistance)
+          : 1;
+        const opacity = THREE.MathUtils.clamp(fade, 0, 1);
+
+        markerProjection.copy(markerPosition).project(camera);
+        const behindCamera = markerProjection.z > 1;
+
+        if (behindCamera || opacity <= 0) {
+          el.style.opacity = "0";
+          el.style.visibility = "hidden";
+          el.style.pointerEvents = "none";
+          continue;
+        }
+
+        const screenX = (markerProjection.x * 0.5 + 0.5) * width;
+        const screenY = (-markerProjection.y * 0.5 + 0.5) * height;
+        el.style.visibility = "visible";
+        el.style.opacity = String(opacity);
+        el.style.transform = `translate(-50%, -50%) translate(${screenX}px, ${screenY}px)`;
+        el.style.pointerEvents = opacity >= 0.6 ? "auto" : "none";
+      }
+    };
+
     const animate = () => {
       const speedMultiplier = mobile
         ? 1 + joystickStrengthRef.current * (VIEWER_CONFIG.movement.boostMultiplier - 1)
@@ -1013,6 +1109,7 @@ export default function MonasteryViewer() {
         if (showCoordsRef.current && coordsHudRef.current) {
           coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
         }
+        updateMarkers();
         renderer.render(scene, camera);
       }
       animationFrame = window.requestAnimationFrame(animate);
@@ -1041,6 +1138,11 @@ export default function MonasteryViewer() {
       renderer.domElement.remove();
     };
   }, [updateLoadState]);
+
+  // 信息点按钮挂载后触发一次位置/显隐更新。
+  useEffect(() => {
+    if (modelReady) needsRenderRef.current = true;
+  }, [modelReady]);
 
   const updateJoystick = (event: ReactPointerEvent<HTMLDivElement>) => {
     const joystick = event.currentTarget;
@@ -1095,6 +1197,23 @@ export default function MonasteryViewer() {
   return (
     <section className="viewer-shell" aria-label="修道院三维虚拟漫游">
       <div ref={canvasHostRef} className="viewer-canvas" />
+
+      {modelReady &&
+        infoPoints.map((point) => (
+          <button
+            key={point.key}
+            ref={(el) => {
+              infoMarkerRefs.current[point.key] = el;
+            }}
+            className="info-marker"
+            type="button"
+            aria-label={`查看${point.label}介绍`}
+            onClick={() => setActiveInfo(point)}
+          >
+            <span className="info-marker-dot" aria-hidden="true" />
+            <span className="info-marker-label">{point.label}</span>
+          </button>
+        ))}
 
       <button
         className="viewer-control menu-toggle"
@@ -1271,6 +1390,33 @@ export default function MonasteryViewer() {
             </button>
             </div>
           )}
+        </div>
+      )}
+
+      {activeInfo && (
+        <div
+          className="info-panel-backdrop"
+          role="presentation"
+          onClick={() => setActiveInfo(null)}
+        >
+          <div
+            className="info-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label={activeInfo.title}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="info-panel-kicker">关于 {activeInfo.label}</div>
+            <div className="info-panel-title">{activeInfo.title}</div>
+            <p className="info-panel-content">{activeInfo.content}</p>
+            <button
+              className="info-panel-close"
+              type="button"
+              onClick={() => setActiveInfo(null)}
+            >
+              关闭
+            </button>
+          </div>
         </div>
       )}
     </section>

@@ -63,8 +63,8 @@ const MODEL_CONFIGS = {
     camera: {
       initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
       initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
-      eyeOffset: 3.5, // 相机距离模型地面的最低安全高度，防止穿入地下。
-      eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
+      eyeOffset: 4.4, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeHeightRatio: 0, // 初始相机高度占模型高度的比例。
       minimumEyeClearance: 0, // 初始相机高于最低安全高度的额外距离。
       viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
       cameraOffsetX: 3.7, // 初始相机相对模型中心的 X 偏移。
@@ -88,7 +88,7 @@ const MODEL_CONFIGS = {
     camera: {
       initialPosition: [0, 80, 60] as const, // 模型加载前的临时相机位置。
       initialPitch: 0, // 模型加载前的初始俯视角，单位为弧度。
-      eyeOffset: 4, // 相机距离模型地面的最低安全高度，防止穿入地下。
+      eyeOffset: 3, // 相机距离模型地面的最低安全高度，防止穿入地下。
       eyeHeightRatio: 0.18, // 初始相机高度占模型高度的比例。
       minimumEyeClearance: 0, // 初始相机高于最低安全高度的额外距离。
       viewDistanceRatio: 0.55, // 初始观察距离占模型最大尺寸的比例。
@@ -96,14 +96,14 @@ const MODEL_CONFIGS = {
       cameraOffsetY: 0, // 初始相机相对计算高度的 Y 偏移。
       cameraOffsetZ: -24.5, // 初始相机相对计算距离的 Z 偏移。
       targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
-      targetHeightRatio: 0.21, // 初始视线目标高度占模型高度的比例。
+      targetHeightRatio: 0.19, // 初始视线目标高度占模型高度的比例。
       targetOffsetZ: 0, // 初始视线目标相对模型中心的 Z 偏移。
     },
     movement: {
-      desktopSpeed: 0.10, // 电脑端 WASD 每帧移动速度。
-      mobileSpeed: 0.12, // 手机端摇杆每帧基础移动速度。
-      verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
-      mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
+      desktopSpeed: 0.08, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.02, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.12, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.12, // 手机端上下飞行每帧基础移动速度。
     },
   },
 } as const;
@@ -130,6 +130,10 @@ const VIEWER_CONFIG = {
     mouseLookSensitivity: 0.0015, // 鼠标拖拽转向灵敏度；越大转动越快。
     wheelHeightSensitivity: 0.08, // 鼠标滚轮升降灵敏度；越大升降越快。
   },
+  gravity: {
+    accel: 0.02, // 开启模拟重力后，相机每帧向下加速度；越大下落越快。
+    maxFallSpeed: 0.5, // 开启模拟重力后，每帧最大下落速度，防止高速穿模漏检。
+  },
   renderer: {
     antialias: true, // 是否启用抗锯齿。
     exposure: 3, // 整体曝光强度；越大画面越亮。
@@ -151,9 +155,15 @@ const VIEWER_CONFIG = {
   },
   collision: {
     enabled: true, // 是否启用碰撞体积（基于模型三角面构建的网格）。
-    cellSize: 8, // 碰撞网格单元大小，越小精度越高、构建越慢。
-    radius: 1.2, // 相机碰撞半径，越大越容易被墙体阻挡。
-    wallNormalMax: 0.5, // 仅近似垂直（墙体类）的三角面参与横向碰撞，避免地面挡路。
+    cellSize: 10, // 碰撞网格单元大小，越小精度越高、构建越慢。
+    halfWidth:0.01, // 相机碰撞盒的 X 轴半宽（左右），模拟人的肩宽。
+    halfHeight: 1.8, // 相机碰撞盒的 Y 轴半高（上下），模拟人站立的身高。
+    halfDepth: 0.01, // 相机碰撞盒的 Z 轴半深（前后），与宽度分开可调。
+    wallNormalMax: 0.002, // 法线 |Y| 不超过此值的三角面视为墙体参与横向碰撞，避免地面挡路。
+    floorNormalMin: 0.000001, // 法线 |Y| 大于此值的三角面视为水平面（地板/屋顶/天花板），用于重力落地检测。
+    slideKeepMin: 0.3, // 正面撞墙时保留的切向滑动比例，越小越容易被"顶住"。
+    slideKeepMax: 0.6, // 擦边接触时保留的切向滑动比例，接近 1 时几乎不减速。
+    resolveIterations: 2, // 滑移后的二次碰撞解析次数，减少墙角卡顿与抖动。
   },
 } as const;
 
@@ -184,6 +194,7 @@ class CollisionGrid {
   private readonly tempC = new THREE.Vector3();
   private readonly tempTriangle = new THREE.Triangle();
   private readonly tempClosest = new THREE.Vector3();
+  private readonly tempDir = new THREE.Vector3();
 
   constructor(root: THREE.Object3D, cellSize: number) {
     this.cellSize = cellSize;
@@ -261,16 +272,33 @@ class CollisionGrid {
     }
   }
 
-  // 检测目标点是否贴近墙体类三角面（仅横向碰撞用）。
-  isLateralBlocked(moved: THREE.Vector3, radius: number, wallNormalMax: number): boolean {
+  // 通用接触查询：检测目标点周围是否被三角面插入。
+  // 通过 filter 选择参与碰撞的三角面（横向用墙体类，纵向用水平面类）。
+  // 碰撞体为以目标点为中心的轴对齐长方体，half 为其各轴半边长。
+  // 返回最近接触点的朝向法线与穿透深度，供碰撞响应使用；无接触时返回 null。
+  private findContact(
+    moved: THREE.Vector3,
+    half: THREE.Vector3,
+    filter: (absNormalY: number) => boolean,
+  ): {
+    normal: THREE.Vector3;
+    penetration: number;
+  } | null {
     const cell = this.cellSize;
-    const ix0 = Math.floor((moved.x - radius) / cell);
-    const ix1 = Math.floor((moved.x + radius) / cell);
-    const iy0 = Math.floor((moved.y - radius) / cell);
-    const iy1 = Math.floor((moved.y + radius) / cell);
-    const iz0 = Math.floor((moved.z - radius) / cell);
-    const iz1 = Math.floor((moved.z + radius) / cell);
-    const radiusSq = radius * radius;
+    const ix0 = Math.floor((moved.x - half.x) / cell);
+    const ix1 = Math.floor((moved.x + half.x) / cell);
+    const iy0 = Math.floor((moved.y - half.y) / cell);
+    const iy1 = Math.floor((moved.y + half.y) / cell);
+    const iz0 = Math.floor((moved.z - half.z) / cell);
+    const iz1 = Math.floor((moved.z + half.z) / cell);
+
+    // 长方体任一点到中心的最远距离为外接球半径 sqrt(hx^2+hy^2+hz^2)，
+    // 最近点超出该距离的三角面不可能接触，用作候选筛选上界。
+    const reachSq = half.x * half.x + half.y * half.y + half.z * half.z;
+
+    let bestDistSq = reachSq;
+    let bestClosest: THREE.Vector3 | null = null;
+    let bestFallbackNormal: THREE.Vector3 | null = null;
 
     for (let ix = ix0; ix <= ix1; ix++) {
       for (let iy = iy0; iy <= iy1; iy++) {
@@ -279,18 +307,82 @@ class CollisionGrid {
           if (!list) continue;
           for (const t of list) {
             const o = t * 12;
-            if (Math.abs(this.triangles[o + 11]) > wallNormalMax) continue;
+            if (!filter(Math.abs(this.triangles[o + 11]))) continue;
             this.tempA.set(this.triangles[o], this.triangles[o + 1], this.triangles[o + 2]);
             this.tempB.set(this.triangles[o + 3], this.triangles[o + 4], this.triangles[o + 5]);
             this.tempC.set(this.triangles[o + 6], this.triangles[o + 7], this.triangles[o + 8]);
             this.tempTriangle.set(this.tempA, this.tempB, this.tempC);
             this.tempTriangle.closestPointToPoint(moved, this.tempClosest);
-            if (this.tempClosest.distanceToSquared(moved) < radiusSq) return true;
+            const distSq = this.tempClosest.distanceToSquared(moved);
+            if (distSq >= bestDistSq) continue;
+            const dist = Math.sqrt(distSq);
+            if (dist < 1e-6) {
+              // 中心落在面上时按三角面法线作为推出方向。
+              this.tempDir
+                .set(this.triangles[o + 9], this.triangles[o + 10], this.triangles[o + 11])
+                .normalize();
+            } else {
+              this.tempDir.subVectors(moved, this.tempClosest).divideScalar(dist);
+            }
+            // 长方体沿接触方向的支撑距离为 hx*|nx|+hy*|ny|+hz*|nz|，
+            // 中心到面最近点的距离小于该值才表示长方体真的被插入。
+            const support =
+              half.x * Math.abs(this.tempDir.x) +
+              half.y * Math.abs(this.tempDir.y) +
+              half.z * Math.abs(this.tempDir.z);
+            if (support - dist <= 0) continue;
+            bestDistSq = distSq;
+            bestClosest ??= new THREE.Vector3();
+            bestClosest.copy(this.tempClosest);
+            bestFallbackNormal ??= new THREE.Vector3();
+            bestFallbackNormal.copy(this.tempDir);
           }
         }
       }
     }
-    return false;
+
+    if (!bestClosest) return null;
+
+    const normal = new THREE.Vector3().subVectors(moved, bestClosest);
+    const dist = Math.sqrt(bestDistSq);
+    if (dist < 1e-6) {
+      normal.copy(bestFallbackNormal ?? new THREE.Vector3(0, 0, 1)).normalize();
+    } else {
+      normal.divideScalar(dist);
+    }
+
+    return {
+      normal,
+      penetration:
+        half.x * Math.abs(normal.x) +
+        half.y * Math.abs(normal.y) +
+        half.z * Math.abs(normal.z) -
+        dist,
+    };
+  }
+
+  // 横向碰撞：只对墙体类三角面（法线近似垂直）做检测，避免地面挡路。
+  lateralContact(moved: THREE.Vector3, half: THREE.Vector3, wallNormalMax: number): {
+    normal: THREE.Vector3;
+    penetration: number;
+  } | null {
+    return this.findContact(moved, half, (absNormalY) => absNormalY <= wallNormalMax);
+  }
+
+  // 纵向碰撞：只对水平面类三角面（地板、楼板、屋顶）做检测，与横向互补。
+  verticalContact(moved: THREE.Vector3, half: THREE.Vector3, wallNormalMax: number): {
+    normal: THREE.Vector3;
+    penetration: number;
+  } | null {
+    return this.findContact(moved, half, (absNormalY) => absNormalY > wallNormalMax);
+  }
+
+  // 重力落地检测：只对法线 |Y| 大于 floorNormalMin 的水平面做检测，用于模拟重力时的着地解析。
+  floorContact(moved: THREE.Vector3, half: THREE.Vector3, floorNormalMin: number): {
+    normal: THREE.Vector3;
+    penetration: number;
+  } | null {
+    return this.findContact(moved, half, (absNormalY) => absNormalY > floorNormalMin);
   }
 }
 
@@ -318,6 +410,12 @@ export default function MonasteryViewer() {
   const risePressedRef = useRef(false);
   const descendPressedRef = useRef(false);
   const joystickKnobRef = useRef<HTMLDivElement>(null);
+  const coordsHudRef = useRef<HTMLDivElement>(null);
+  const showCoordsRef = useRef(false);
+  const gravityRef = useRef(true);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showCoords, setShowCoords] = useState(false);
+  const [gravityEnabled, setGravityEnabled] = useState(true);
   const [isMobileDevice, setIsMobileDevice] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [loadStage, setLoadStage] = useState<LoadStage>("初始化");
@@ -382,6 +480,7 @@ export default function MonasteryViewer() {
     let collisionGrid: CollisionGrid | null = null;
     let yaw = 0;
     let pitch: number = modelConfig.camera.initialPitch;
+    let verticalVelocity = 0;
     let isMouseDown = false;
     let useGyro = false;
     let gyroReady = false;
@@ -389,6 +488,10 @@ export default function MonasteryViewer() {
     let gyroYawOffset = 0;
     let gyroPitchOffset = 0;
     let gyroPermissionPending = false;
+    let orientationSource: "unknown" | "relative" | "absolute" = "unknown";
+    let sawRelativeOrientationEvent = false;
+    let orientationSourceLockFrame = 0;
+    let lastGyroStatus: string | null = null;
     let disposed = false;
     let animationFrame = 0;
     let loadProgressFrame = 0;
@@ -426,6 +529,7 @@ export default function MonasteryViewer() {
       joystickStrengthRef.current = 0;
       risePressedRef.current = false;
       descendPressedRef.current = false;
+      verticalVelocity = 0;
       if (joystickKnobRef.current) {
         joystickKnobRef.current.style.transform = "translate(-50%, -50%)";
       }
@@ -452,6 +556,7 @@ export default function MonasteryViewer() {
       );
     };
     const onWheel = (event: WheelEvent) => {
+      if (gravityRef.current) return;
       event.preventDefault();
       camera.position.y -= event.deltaY * VIEWER_CONFIG.movement.wheelHeightSensitivity;
       limitCameraHeight();
@@ -470,11 +575,40 @@ export default function MonasteryViewer() {
       renderer.setSize(window.innerWidth, window.innerHeight);
     };
 
+    const reportGyroStatus = (status: string) => {
+      if (lastGyroStatus !== status) {
+        lastGyroStatus = status;
+        setGyroStatus(status);
+      }
+    };
+
     const onOrientation = (event: DeviceOrientationEvent) => {
-      const { alpha, beta, gamma } = event;
+      const { alpha, beta, gamma, absolute } = event;
       if (alpha === null || beta === null || gamma === null) return;
 
-      setGyroStatus("陀螺仪：数据正常");
+      // 部分安卓设备会对同一份传感器样本同时触发 deviceorientation 与
+      // deviceorientationabsolute 两个事件，且两者的 alpha 存在常量偏差，
+      // 若都参与计算，视角会在两个角度之间来回闪烁。这里锁定单一数据源：
+      // 优先使用 absolute 事件；仅当确认设备不提供 absolute（如 iOS）时，
+      // 才在下一帧回退到相对事件。
+      if (orientationSource === "unknown") {
+        if (absolute === true) {
+          orientationSource = "absolute";
+          if (orientationSourceLockFrame) cancelAnimationFrame(orientationSourceLockFrame);
+        } else if (!sawRelativeOrientationEvent) {
+          sawRelativeOrientationEvent = true;
+          if (orientationSourceLockFrame) cancelAnimationFrame(orientationSourceLockFrame);
+          orientationSourceLockFrame = requestAnimationFrame(() => {
+            if (orientationSource === "unknown") orientationSource = "relative";
+          });
+        }
+      }
+
+      if (orientationSource === "unknown") return;
+      if (orientationSource === "absolute" && absolute !== true) return;
+      if (orientationSource === "relative" && absolute === true) return;
+
+      reportGyroStatus("陀螺仪：数据正常");
 
       const alphaRad = THREE.MathUtils.degToRad(alpha);
       const betaRad = THREE.MathUtils.degToRad(beta);
@@ -701,6 +835,11 @@ export default function MonasteryViewer() {
 
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
+    const collisionHalf = new THREE.Vector3(
+      VIEWER_CONFIG.collision.halfWidth,
+      VIEWER_CONFIG.collision.halfHeight,
+      VIEWER_CONFIG.collision.halfDepth,
+    );
     const animate = () => {
       const speedMultiplier = mobile
         ? 1 + joystickStrengthRef.current * (VIEWER_CONFIG.movement.boostMultiplier - 1)
@@ -732,19 +871,98 @@ export default function MonasteryViewer() {
       if (keys.d) lateralDelta.addScaledVector(right, -currentMoveSpeed);
 
       if (lateralDelta.lengthSq() > 0) {
-        const moved = camera.position.clone().add(lateralDelta);
-        const blocked =
-          collisionGrid !== null &&
-          collisionGrid.isLateralBlocked(moved, VIEWER_CONFIG.collision.radius, VIEWER_CONFIG.collision.wallNormalMax);
-        if (!blocked) camera.position.copy(moved);
+        const collision = VIEWER_CONFIG.collision;
+        const remaining = lateralDelta.clone();
+        for (
+          let step = 0;
+          step < collision.resolveIterations && remaining.lengthSq() > 1e-8;
+          step++
+        ) {
+          const moved = camera.position.clone().add(remaining);
+          const contact =
+            collisionGrid !== null
+              ? collisionGrid.lateralContact(moved, collisionHalf, collision.wallNormalMax)
+              : null;
+
+          if (!contact) {
+            camera.position.copy(moved);
+            break;
+          }
+
+          // 先把相机沿接触法线推出到碰撞半径外，保证不会陷入墙内；
+          // 额外留出微小间隙，避免起伏墙面每帧在"嵌入/推出"间反复切换导致抖动。
+          camera.position.copy(moved).addScaledVector(contact.normal, contact.penetration + 0.01);
+
+          const intoWall = remaining.dot(contact.normal);
+          if (intoWall <= 0) break;
+
+          // 按接触角吸收法向速度，保留并按比例减速切向速度，实现贴墙滑动。
+          const moveSpeed = remaining.length();
+          const headOn = intoWall / moveSpeed;
+          const slideKeep =
+            collision.slideKeepMax -
+            (collision.slideKeepMax - collision.slideKeepMin) * headOn;
+          remaining.addScaledVector(contact.normal, -intoWall).multiplyScalar(slideKeep);
+        }
       }
 
       const verticalAxis = (risePressedRef.current ? 1 : 0) - (descendPressedRef.current ? 1 : 0);
-      if (verticalAxis !== 0) {
-        camera.position.y += currentVerticalSpeed * verticalAxis;
+      if (verticalAxis !== 0 && !gravityRef.current) {
+        const moved = camera.position.clone();
+        const verticalSpeed = mobile
+          ? modelConfig.movement.mobileVerticalSpeed
+          : modelConfig.movement.verticalSpeed;
+        moved.y += verticalSpeed * 
+                  (mobile ? 1 + joystickStrengthRef.current * 1.5 : 1) * 
+                  verticalAxis;
+        
+        if (collisionGrid) {
+          const contact = collisionGrid.verticalContact(moved, collisionHalf, VIEWER_CONFIG.collision.wallNormalMax);
+          if (contact) {
+            moved.addScaledVector(contact.normal, contact.penetration + 0.01);  // +0.01 防止立即再碰
+          }
+        }
+        camera.position.copy(moved);
       }
 
-      limitCameraHeight();
+      // 模拟重力：持续向下加速，落地后归零速度；仅在有碰撞网格时生效，防止加载期间无限下落。
+      if (gravityRef.current && collisionGrid) {
+        verticalVelocity = Math.max(
+          verticalVelocity - VIEWER_CONFIG.gravity.accel,
+          -VIEWER_CONFIG.gravity.maxFallSpeed,
+        );
+        const moved = camera.position.clone();
+        moved.y += verticalVelocity;
+        const contact = collisionGrid.floorContact(
+          moved,
+          collisionHalf,
+          VIEWER_CONFIG.collision.floorNormalMin,
+        );
+        if (contact) {
+          if (contact.normal.y > 0) {
+            // 落地/站立时只沿 Y 轴抬升：若沿整条倾斜法线推出，会把相机横向顶偏，
+            // 在起伏地面上随接触点切换反复横移，造成"落地抖动"。
+            // 除以法线 Y 分量可精确抵消竖直穿透，其余各帧保持在同一落点。
+            const lift = contact.penetration / Math.max(contact.normal.y, 0.001);
+            moved.y += lift + 0.01;
+            if (verticalVelocity < 0) verticalVelocity = 0;
+          } else {
+            // 天花板（法线朝下）仍沿法线推出。
+            moved.addScaledVector(contact.normal, contact.penetration + 0.01);
+            if (verticalVelocity > 0) verticalVelocity = 0;
+          }
+        }
+        camera.position.copy(moved);
+      }
+
+      if (gravityRef.current) {
+        camera.position.y = Math.max(camera.position.y, floorMinY + collisionHalf.y);
+      } else {
+        limitCameraHeight();
+      }
+      if (showCoordsRef.current && coordsHudRef.current) {
+        coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
+      }
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(animate);
     };
@@ -824,24 +1042,84 @@ export default function MonasteryViewer() {
       <div ref={canvasHostRef} className="viewer-canvas" />
 
       <button
-        className="viewer-control reset-button"
+        className="viewer-control menu-toggle"
         type="button"
-        disabled={!modelReady}
-        onClick={() => resetCameraRef.current()}
+        aria-expanded={menuOpen}
+        aria-label="更多选项"
+        onClick={() => setMenuOpen((open) => !open)}
       >
-        重置
+        <span className="menu-icon" aria-hidden="true" />
       </button>
 
-      {isMobileDevice && <div className="viewer-control gyro-status">{gyroStatus}</div>}
+      {menuOpen && <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />}
 
-      {isMobileDevice && canEnableGyro && (
-        <button
-          className="viewer-control gyro-button"
-          type="button"
-          onClick={() => activateGyroRef.current()}
-        >
-          启用陀螺仪
-        </button>
+      {menuOpen && (
+        <div className="viewer-control menu-panel" role="menu" aria-label="更多选项">
+          <button
+            className="menu-item"
+            type="button"
+            role="menuitem"
+            disabled={!modelReady}
+            onClick={() => {
+              resetCameraRef.current();
+              setMenuOpen(false);
+            }}
+          >
+            重置
+          </button>
+
+          {isMobileDevice && <div className="menu-status">{gyroStatus}</div>}
+
+          {isMobileDevice && canEnableGyro && (
+            <button
+              className="menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                activateGyroRef.current();
+                setMenuOpen(false);
+              }}
+            >
+              启用陀螺仪
+            </button>
+          )}
+
+          <label className="menu-toggle-row">
+            <span>模拟重力</span>
+            <input
+              type="checkbox"
+              checked={gravityEnabled}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setGravityEnabled(next);
+                gravityRef.current = next;
+                if (next) {
+                  risePressedRef.current = false;
+                  descendPressedRef.current = false;
+                }
+              }}
+            />
+          </label>
+
+          <label className="menu-toggle-row">
+            <span>显示坐标</span>
+            <input
+              type="checkbox"
+              checked={showCoords}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setShowCoords(next);
+                showCoordsRef.current = next;
+              }}
+            />
+          </label>
+        </div>
+      )}
+
+      {showCoords && (
+        <div className="viewer-control coords-hud" ref={coordsHudRef}>
+          X --　Y --　Z --
+        </div>
       )}
 
       {!modelReady && (
@@ -894,8 +1172,7 @@ export default function MonasteryViewer() {
 
       {isMobileDevice && (
         <div className="mobile-flight-controls">
-          <div
-            className="joystick"
+          <div className="joystick"
             aria-label="移动摇杆"
             role="application"
             onPointerDown={(event) => {
@@ -912,7 +1189,8 @@ export default function MonasteryViewer() {
             <div ref={joystickKnobRef} className="joystick-knob" />
           </div>
 
-          <div className="flight-buttons" aria-label="飞行升降控制">
+          {!gravityEnabled && (
+            <div className="flight-buttons" aria-label="飞行升降控制">
             <button
               className="flight-button"
               type="button"
@@ -933,7 +1211,8 @@ export default function MonasteryViewer() {
             >
               下
             </button>
-          </div>
+            </div>
+          )}
         </div>
       )}
     </section>

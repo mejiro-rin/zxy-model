@@ -389,6 +389,10 @@ export default function MonasteryViewer() {
     let gyroYawOffset = 0;
     let gyroPitchOffset = 0;
     let gyroPermissionPending = false;
+    let orientationSource: "unknown" | "relative" | "absolute" = "unknown";
+    let sawRelativeOrientationEvent = false;
+    let orientationSourceLockFrame = 0;
+    let lastGyroStatus: string | null = null;
     let disposed = false;
     let animationFrame = 0;
     let loadProgressFrame = 0;
@@ -470,11 +474,40 @@ export default function MonasteryViewer() {
       renderer.setSize(window.innerWidth, window.innerHeight);
     };
 
+    const reportGyroStatus = (status: string) => {
+      if (lastGyroStatus !== status) {
+        lastGyroStatus = status;
+        setGyroStatus(status);
+      }
+    };
+
     const onOrientation = (event: DeviceOrientationEvent) => {
-      const { alpha, beta, gamma } = event;
+      const { alpha, beta, gamma, absolute } = event;
       if (alpha === null || beta === null || gamma === null) return;
 
-      setGyroStatus("陀螺仪：数据正常");
+      // 部分安卓设备会对同一份传感器样本同时触发 deviceorientation 与
+      // deviceorientationabsolute 两个事件，且两者的 alpha 存在常量偏差，
+      // 若都参与计算，视角会在两个角度之间来回闪烁。这里锁定单一数据源：
+      // 优先使用 absolute 事件；仅当确认设备不提供 absolute（如 iOS）时，
+      // 才在下一帧回退到相对事件。
+      if (orientationSource === "unknown") {
+        if (absolute === true) {
+          orientationSource = "absolute";
+          if (orientationSourceLockFrame) cancelAnimationFrame(orientationSourceLockFrame);
+        } else if (!sawRelativeOrientationEvent) {
+          sawRelativeOrientationEvent = true;
+          if (orientationSourceLockFrame) cancelAnimationFrame(orientationSourceLockFrame);
+          orientationSourceLockFrame = requestAnimationFrame(() => {
+            if (orientationSource === "unknown") orientationSource = "relative";
+          });
+        }
+      }
+
+      if (orientationSource === "unknown") return;
+      if (orientationSource === "absolute" && absolute !== true) return;
+      if (orientationSource === "relative" && absolute === true) return;
+
+      reportGyroStatus("陀螺仪：数据正常");
 
       const alphaRad = THREE.MathUtils.degToRad(alpha);
       const betaRad = THREE.MathUtils.degToRad(beta);
@@ -754,6 +787,7 @@ export default function MonasteryViewer() {
       disposed = true;
       window.cancelAnimationFrame(animationFrame);
       window.cancelAnimationFrame(loadProgressFrame);
+      if (orientationSourceLockFrame) window.cancelAnimationFrame(orientationSourceLockFrame);
       resetCameraRef.current = () => undefined;
       activateGyroRef.current = () => undefined;
       renderer.domElement.removeEventListener("mousedown", onMouseDown);

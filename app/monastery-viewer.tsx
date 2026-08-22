@@ -413,6 +413,8 @@ export default function MonasteryViewer() {
   const coordsHudRef = useRef<HTMLDivElement>(null);
   const showCoordsRef = useRef(false);
   const gravityRef = useRef(true);
+  const groundedRef = useRef(false);
+  const needsRenderRef = useRef(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showCoords, setShowCoords] = useState(false);
   const [gravityEnabled, setGravityEnabled] = useState(true);
@@ -467,9 +469,11 @@ export default function MonasteryViewer() {
     );
     camera.position.set(...(modelConfig.camera.initialPosition as [number, number, number]));
 
-    const renderer = new THREE.WebGLRenderer({ antialias: VIEWER_CONFIG.renderer.antialias });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: VIEWER_CONFIG.renderer.antialias && window.devicePixelRatio < 2,
+    });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobile ? 1.5 : 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = VIEWER_CONFIG.renderer.exposure;
     renderer.shadowMap.enabled = VIEWER_CONFIG.renderer.shadows;
@@ -495,6 +499,11 @@ export default function MonasteryViewer() {
     let disposed = false;
     let animationFrame = 0;
     let loadProgressFrame = 0;
+    let lastViewX = 0;
+    let lastViewY = 0;
+    let lastViewZ = 0;
+    let lastViewYaw = 0;
+    let lastViewPitch = 0;
     const initialCameraPosition = new THREE.Vector3();
     let initialYaw = 0;
     let initialPitch = 0;
@@ -536,6 +545,8 @@ export default function MonasteryViewer() {
       gyroYawOffset = 0;
       gyroPitchOffset = 0;
       gyroCalibrated = false;
+      groundedRef.current = false;
+      needsRenderRef.current = true;
     };
     resetCameraRef.current = resetCamera;
 
@@ -554,25 +565,34 @@ export default function MonasteryViewer() {
         -VIEWER_CONFIG.camera.maxPitch,
         VIEWER_CONFIG.camera.maxPitch,
       );
+      needsRenderRef.current = true;
     };
     const onWheel = (event: WheelEvent) => {
       if (gravityRef.current) return;
       event.preventDefault();
       camera.position.y -= event.deltaY * VIEWER_CONFIG.movement.wheelHeightSensitivity;
       limitCameraHeight();
+      needsRenderRef.current = true;
     };
     const onKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      if (isMovementKey(key)) keys[key] = true;
+      if (isMovementKey(key)) {
+        keys[key] = true;
+        needsRenderRef.current = true;
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      if (isMovementKey(key)) keys[key] = false;
+      if (isMovementKey(key)) {
+        keys[key] = false;
+        needsRenderRef.current = true;
+      }
     };
     const onResize = () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      needsRenderRef.current = true;
     };
 
     const reportGyroStatus = (status: string) => {
@@ -643,6 +663,7 @@ export default function MonasteryViewer() {
         -VIEWER_CONFIG.camera.maxPitch,
         VIEWER_CONFIG.camera.maxPitch,
       );
+      needsRenderRef.current = true;
     };
 
     const bindGyro = () => {
@@ -926,7 +947,16 @@ export default function MonasteryViewer() {
       }
 
       // 模拟重力：持续向下加速，落地后归零速度；仅在有碰撞网格时生效，防止加载期间无限下落。
-      if (gravityRef.current && collisionGrid) {
+      // 落地静止（grounded）且无任何交互时跳过重力与 floorContact 查询，
+      // 让静止状态真正静止，配合按需渲染避免待机时每帧重绘导致的发热。
+      const interacting =
+        keys.w || keys.s || keys.a || keys.d ||
+        joystickStrengthRef.current > 0 ||
+        risePressedRef.current ||
+        descendPressedRef.current ||
+        isMouseDown ||
+        useGyro;
+      if (gravityRef.current && collisionGrid && (!groundedRef.current || interacting)) {
         verticalVelocity = Math.max(
           verticalVelocity - VIEWER_CONFIG.gravity.accel,
           -VIEWER_CONFIG.gravity.maxFallSpeed,
@@ -946,11 +976,15 @@ export default function MonasteryViewer() {
             const lift = contact.penetration / Math.max(contact.normal.y, 0.001);
             moved.y += lift + 0.01;
             if (verticalVelocity < 0) verticalVelocity = 0;
+            groundedRef.current = true;
           } else {
             // 天花板（法线朝下）仍沿法线推出。
             moved.addScaledVector(contact.normal, contact.penetration + 0.01);
             if (verticalVelocity > 0) verticalVelocity = 0;
+            groundedRef.current = false;
           }
+        } else {
+          groundedRef.current = false;
         }
         camera.position.copy(moved);
       }
@@ -960,10 +994,27 @@ export default function MonasteryViewer() {
       } else {
         limitCameraHeight();
       }
-      if (showCoordsRef.current && coordsHudRef.current) {
-        coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
+      // 按需渲染：视角/位置发生真实变化（或收到外部触发）才重绘，
+      // 待机静止时跳过 render，避免 GPU 持续满载导致发热掉帧。
+      const viewChanged =
+        Math.abs(camera.position.x - lastViewX) > 1e-4 ||
+        Math.abs(camera.position.y - lastViewY) > 1e-4 ||
+        Math.abs(camera.position.z - lastViewZ) > 1e-4 ||
+        Math.abs(yaw - lastViewYaw) > 1e-4 ||
+        Math.abs(pitch - lastViewPitch) > 1e-4;
+
+      if (viewChanged || needsRenderRef.current) {
+        lastViewX = camera.position.x;
+        lastViewY = camera.position.y;
+        lastViewZ = camera.position.z;
+        lastViewYaw = yaw;
+        lastViewPitch = pitch;
+        needsRenderRef.current = false;
+        if (showCoordsRef.current && coordsHudRef.current) {
+          coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
+        }
+        renderer.render(scene, camera);
       }
-      renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(animate);
     };
     animate();
@@ -1016,6 +1067,7 @@ export default function MonasteryViewer() {
     keysRef.current.s = normalizedY > deadZone;
     keysRef.current.a = normalizedX < -deadZone;
     keysRef.current.d = normalizedX > deadZone;
+    needsRenderRef.current = true;
   };
 
   const resetJoystick = () => {
@@ -1024,6 +1076,7 @@ export default function MonasteryViewer() {
     keysRef.current.s = false;
     keysRef.current.a = false;
     keysRef.current.d = false;
+    needsRenderRef.current = true;
     if (joystickKnobRef.current) {
       joystickKnobRef.current.style.transform = "translate(-50%, -50%)";
     }
@@ -1031,10 +1084,12 @@ export default function MonasteryViewer() {
 
   const setRisePressed = (pressed: boolean) => {
     risePressedRef.current = pressed;
+    if (pressed) needsRenderRef.current = true;
   };
 
   const setDescendPressed = (pressed: boolean) => {
     descendPressedRef.current = pressed;
+    if (pressed) needsRenderRef.current = true;
   };
 
   return (
@@ -1093,6 +1148,8 @@ export default function MonasteryViewer() {
                 const next = event.target.checked;
                 setGravityEnabled(next);
                 gravityRef.current = next;
+                groundedRef.current = false;
+                needsRenderRef.current = true;
                 if (next) {
                   risePressedRef.current = false;
                   descendPressedRef.current = false;
@@ -1110,6 +1167,7 @@ export default function MonasteryViewer() {
                 const next = event.target.checked;
                 setShowCoords(next);
                 showCoordsRef.current = next;
+                needsRenderRef.current = true;
               }}
             />
           </label>

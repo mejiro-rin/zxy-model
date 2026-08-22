@@ -318,6 +318,10 @@ export default function MonasteryViewer() {
   const risePressedRef = useRef(false);
   const descendPressedRef = useRef(false);
   const joystickKnobRef = useRef<HTMLDivElement>(null);
+  const coordsHudRef = useRef<HTMLDivElement>(null);
+  const showCoordsRef = useRef(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [showCoords, setShowCoords] = useState(false);
   const [isMobileDevice, setIsMobileDevice] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [loadStage, setLoadStage] = useState<LoadStage>("初始化");
@@ -778,6 +782,9 @@ export default function MonasteryViewer() {
       }
 
       limitCameraHeight();
+      if (showCoordsRef.current && coordsHudRef.current) {
+        coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
+      }
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(animate);
     };
@@ -787,7 +794,6 @@ export default function MonasteryViewer() {
       disposed = true;
       window.cancelAnimationFrame(animationFrame);
       window.cancelAnimationFrame(loadProgressFrame);
-      if (orientationSourceLockFrame) window.cancelAnimationFrame(orientationSourceLockFrame);
       resetCameraRef.current = () => undefined;
       activateGyroRef.current = () => undefined;
       renderer.domElement.removeEventListener("mousedown", onMouseDown);
@@ -858,24 +864,67 @@ export default function MonasteryViewer() {
       <div ref={canvasHostRef} className="viewer-canvas" />
 
       <button
-        className="viewer-control reset-button"
+        className="viewer-control menu-toggle"
         type="button"
-        disabled={!modelReady}
-        onClick={() => resetCameraRef.current()}
+        aria-expanded={menuOpen}
+        aria-label="更多选项"
+        onClick={() => setMenuOpen((open) => !open)}
       >
-        重置
+        <span className="menu-icon" aria-hidden="true" />
       </button>
 
-      {isMobileDevice && <div className="viewer-control gyro-status">{gyroStatus}</div>}
+      {menuOpen && <div className="menu-backdrop" onClick={() => setMenuOpen(false)} />}
 
-      {isMobileDevice && canEnableGyro && (
-        <button
-          className="viewer-control gyro-button"
-          type="button"
-          onClick={() => activateGyroRef.current()}
-        >
-          启用陀螺仪
-        </button>
+      {menuOpen && (
+        <div className="viewer-control menu-panel" role="menu" aria-label="更多选项">
+          <button
+            className="menu-item"
+            type="button"
+            role="menuitem"
+            disabled={!modelReady}
+            onClick={() => {
+              resetCameraRef.current();
+              setMenuOpen(false);
+            }}
+          >
+            重置
+          </button>
+
+          {isMobileDevice && <div className="menu-status">{gyroStatus}</div>}
+
+          {isMobileDevice && canEnableGyro && (
+            <button
+              className="menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                activateGyroRef.current();
+                setMenuOpen(false);
+              }}
+            >
+              启用陀螺仪
+            </button>
+          )}
+
+          <label className="menu-toggle-row">
+            <span>显示坐标</span>
+            <input
+              type="checkbox"
+              checked={showCoords}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setShowCoords(next);
+                showCoordsRef.current = next;
+              }}
+            />
+          </label>
+        </div>
+      )}
+
+      {showCoords && (
+        <div className="viewer-control coords-hud" ref={coordsHudRef}>
+          X --　Y --　Z --
+        </div>
       )}
 
       {!modelReady && (

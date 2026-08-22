@@ -96,14 +96,14 @@ const MODEL_CONFIGS = {
       cameraOffsetY: 0, // 初始相机相对计算高度的 Y 偏移。
       cameraOffsetZ: -24.5, // 初始相机相对计算距离的 Z 偏移。
       targetOffsetX: 0, // 初始视线目标相对模型中心的 X 偏移。
-      targetHeightRatio: 0.21, // 初始视线目标高度占模型高度的比例。
+      targetHeightRatio: 0.19, // 初始视线目标高度占模型高度的比例。
       targetOffsetZ: 0, // 初始视线目标相对模型中心的 Z 偏移。
     },
     movement: {
-      desktopSpeed: 0.10, // 电脑端 WASD 每帧移动速度。
-      mobileSpeed: 0.12, // 手机端摇杆每帧基础移动速度。
-      verticalSpeed: 0.15, // 电脑端上下飞行每帧移动速度。
-      mobileVerticalSpeed: 0.15, // 手机端上下飞行每帧基础移动速度。
+      desktopSpeed: 0.08, // 电脑端 WASD 每帧移动速度。
+      mobileSpeed: 0.02, // 手机端摇杆每帧基础移动速度。
+      verticalSpeed: 0.12, // 电脑端上下飞行每帧移动速度。
+      mobileVerticalSpeed: 0.12, // 手机端上下飞行每帧基础移动速度。
     },
   },
 } as const;
@@ -130,6 +130,10 @@ const VIEWER_CONFIG = {
     mouseLookSensitivity: 0.0015, // 鼠标拖拽转向灵敏度；越大转动越快。
     wheelHeightSensitivity: 0.08, // 鼠标滚轮升降灵敏度；越大升降越快。
   },
+  gravity: {
+    accel: 0.02, // 开启模拟重力后，相机每帧向下加速度；越大下落越快。
+    maxFallSpeed: 0.5, // 开启模拟重力后，每帧最大下落速度，防止高速穿模漏检。
+  },
   renderer: {
     antialias: true, // 是否启用抗锯齿。
     exposure: 3, // 整体曝光强度；越大画面越亮。
@@ -152,10 +156,11 @@ const VIEWER_CONFIG = {
   collision: {
     enabled: true, // 是否启用碰撞体积（基于模型三角面构建的网格）。
     cellSize: 10, // 碰撞网格单元大小，越小精度越高、构建越慢。
-    halfWidth: 0.6, // 相机碰撞盒的 X 轴半宽（左右），模拟人的肩宽。
-    halfHeight: 1, // 相机碰撞盒的 Y 轴半高（上下），模拟人站立的身高。
-    halfDepth: 0.3, // 相机碰撞盒的 Z 轴半深（前后），与宽度分开可调。
-    wallNormalMax: 100, // 仅近似垂直（墙体类）的三角面参与横向碰撞，避免地面挡路。
+    halfWidth:0.01, // 相机碰撞盒的 X 轴半宽（左右），模拟人的肩宽。
+    halfHeight: 1.8, // 相机碰撞盒的 Y 轴半高（上下），模拟人站立的身高。
+    halfDepth: 0.01, // 相机碰撞盒的 Z 轴半深（前后），与宽度分开可调。
+    wallNormalMax: 0.002, // 法线 |Y| 不超过此值的三角面视为墙体参与横向碰撞，避免地面挡路。
+    floorNormalMin: 0.000001, // 法线 |Y| 大于此值的三角面视为水平面（地板/屋顶/天花板），用于重力落地检测。
     slideKeepMin: 0.3, // 正面撞墙时保留的切向滑动比例，越小越容易被"顶住"。
     slideKeepMax: 0.6, // 擦边接触时保留的切向滑动比例，接近 1 时几乎不减速。
     resolveIterations: 2, // 滑移后的二次碰撞解析次数，减少墙角卡顿与抖动。
@@ -371,6 +376,14 @@ class CollisionGrid {
   } | null {
     return this.findContact(moved, half, (absNormalY) => absNormalY > wallNormalMax);
   }
+
+  // 重力落地检测：只对法线 |Y| 大于 floorNormalMin 的水平面做检测，用于模拟重力时的着地解析。
+  floorContact(moved: THREE.Vector3, half: THREE.Vector3, floorNormalMin: number): {
+    normal: THREE.Vector3;
+    penetration: number;
+  } | null {
+    return this.findContact(moved, half, (absNormalY) => absNormalY > floorNormalMin);
+  }
 }
 
 function disposeObject(root: THREE.Object3D) {
@@ -399,8 +412,10 @@ export default function MonasteryViewer() {
   const joystickKnobRef = useRef<HTMLDivElement>(null);
   const coordsHudRef = useRef<HTMLDivElement>(null);
   const showCoordsRef = useRef(false);
+  const gravityRef = useRef(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showCoords, setShowCoords] = useState(false);
+  const [gravityEnabled, setGravityEnabled] = useState(true);
   const [isMobileDevice, setIsMobileDevice] = useState(false);
   const [modelReady, setModelReady] = useState(false);
   const [loadStage, setLoadStage] = useState<LoadStage>("初始化");
@@ -465,6 +480,7 @@ export default function MonasteryViewer() {
     let collisionGrid: CollisionGrid | null = null;
     let yaw = 0;
     let pitch: number = modelConfig.camera.initialPitch;
+    let verticalVelocity = 0;
     let isMouseDown = false;
     let useGyro = false;
     let gyroReady = false;
@@ -513,6 +529,7 @@ export default function MonasteryViewer() {
       joystickStrengthRef.current = 0;
       risePressedRef.current = false;
       descendPressedRef.current = false;
+      verticalVelocity = 0;
       if (joystickKnobRef.current) {
         joystickKnobRef.current.style.transform = "translate(-50%, -50%)";
       }
@@ -539,6 +556,7 @@ export default function MonasteryViewer() {
       );
     };
     const onWheel = (event: WheelEvent) => {
+      if (gravityRef.current) return;
       event.preventDefault();
       camera.position.y -= event.deltaY * VIEWER_CONFIG.movement.wheelHeightSensitivity;
       limitCameraHeight();
@@ -871,8 +889,9 @@ export default function MonasteryViewer() {
             break;
           }
 
-          // 先把相机沿接触法线推出到碰撞半径外，保证不会陷入墙内。
-          camera.position.copy(moved).addScaledVector(contact.normal, contact.penetration);
+          // 先把相机沿接触法线推出到碰撞半径外，保证不会陷入墙内；
+          // 额外留出微小间隙，避免起伏墙面每帧在"嵌入/推出"间反复切换导致抖动。
+          camera.position.copy(moved).addScaledVector(contact.normal, contact.penetration + 0.01);
 
           const intoWall = remaining.dot(contact.normal);
           if (intoWall <= 0) break;
@@ -888,9 +907,12 @@ export default function MonasteryViewer() {
       }
 
       const verticalAxis = (risePressedRef.current ? 1 : 0) - (descendPressedRef.current ? 1 : 0);
-      if (verticalAxis !== 0) {
+      if (verticalAxis !== 0 && !gravityRef.current) {
         const moved = camera.position.clone();
-        moved.y += (modelConfig.movement.mobileVerticalSpeed || modelConfig.movement.verticalSpeed) * 
+        const verticalSpeed = mobile
+          ? modelConfig.movement.mobileVerticalSpeed
+          : modelConfig.movement.verticalSpeed;
+        moved.y += verticalSpeed * 
                   (mobile ? 1 + joystickStrengthRef.current * 1.5 : 1) * 
                   verticalAxis;
         
@@ -903,7 +925,41 @@ export default function MonasteryViewer() {
         camera.position.copy(moved);
       }
 
-      limitCameraHeight();
+      // 模拟重力：持续向下加速，落地后归零速度；仅在有碰撞网格时生效，防止加载期间无限下落。
+      if (gravityRef.current && collisionGrid) {
+        verticalVelocity = Math.max(
+          verticalVelocity - VIEWER_CONFIG.gravity.accel,
+          -VIEWER_CONFIG.gravity.maxFallSpeed,
+        );
+        const moved = camera.position.clone();
+        moved.y += verticalVelocity;
+        const contact = collisionGrid.floorContact(
+          moved,
+          collisionHalf,
+          VIEWER_CONFIG.collision.floorNormalMin,
+        );
+        if (contact) {
+          if (contact.normal.y > 0) {
+            // 落地/站立时只沿 Y 轴抬升：若沿整条倾斜法线推出，会把相机横向顶偏，
+            // 在起伏地面上随接触点切换反复横移，造成"落地抖动"。
+            // 除以法线 Y 分量可精确抵消竖直穿透，其余各帧保持在同一落点。
+            const lift = contact.penetration / Math.max(contact.normal.y, 0.001);
+            moved.y += lift + 0.01;
+            if (verticalVelocity < 0) verticalVelocity = 0;
+          } else {
+            // 天花板（法线朝下）仍沿法线推出。
+            moved.addScaledVector(contact.normal, contact.penetration + 0.01);
+            if (verticalVelocity > 0) verticalVelocity = 0;
+          }
+        }
+        camera.position.copy(moved);
+      }
+
+      if (gravityRef.current) {
+        camera.position.y = Math.max(camera.position.y, floorMinY + collisionHalf.y);
+      } else {
+        limitCameraHeight();
+      }
       if (showCoordsRef.current && coordsHudRef.current) {
         coordsHudRef.current.textContent = `X ${camera.position.x.toFixed(1)}　Y ${camera.position.y.toFixed(1)}　Z ${camera.position.z.toFixed(1)}`;
       }
@@ -1029,6 +1085,23 @@ export default function MonasteryViewer() {
           )}
 
           <label className="menu-toggle-row">
+            <span>模拟重力</span>
+            <input
+              type="checkbox"
+              checked={gravityEnabled}
+              onChange={(event) => {
+                const next = event.target.checked;
+                setGravityEnabled(next);
+                gravityRef.current = next;
+                if (next) {
+                  risePressedRef.current = false;
+                  descendPressedRef.current = false;
+                }
+              }}
+            />
+          </label>
+
+          <label className="menu-toggle-row">
             <span>显示坐标</span>
             <input
               type="checkbox"
@@ -1099,8 +1172,7 @@ export default function MonasteryViewer() {
 
       {isMobileDevice && (
         <div className="mobile-flight-controls">
-          <div
-            className="joystick"
+          <div className="joystick"
             aria-label="移动摇杆"
             role="application"
             onPointerDown={(event) => {
@@ -1117,7 +1189,8 @@ export default function MonasteryViewer() {
             <div ref={joystickKnobRef} className="joystick-knob" />
           </div>
 
-          <div className="flight-buttons" aria-label="飞行升降控制">
+          {!gravityEnabled && (
+            <div className="flight-buttons" aria-label="飞行升降控制">
             <button
               className="flight-button"
               type="button"
@@ -1138,7 +1211,8 @@ export default function MonasteryViewer() {
             >
               下
             </button>
-          </div>
+            </div>
+          )}
         </div>
       )}
     </section>

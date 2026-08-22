@@ -194,6 +194,112 @@ button {
   user-select: none;
 }
 
+/* 场景信息点：JS 每帧通过 transform 定位到投影屏幕坐标，并按距离控制透明度。 */
+.info-marker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid rgb(255 255 255 / 75%);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 50%);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  backdrop-filter: blur(3px);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 30%);
+  user-select: none;
+  touch-action: none;
+}
+
+.info-marker:hover {
+  background: rgb(0 0 0 / 65%);
+}
+
+.info-marker:active {
+  background: rgb(0 0 0 / 75%);
+}
+
+.info-marker-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #bfe9ff;
+  box-shadow: 0 0 0 3px rgb(191 233 255 / 30%);
+}
+
+.info-marker-label {
+  white-space: nowrap;
+}
+
+/* 信息点介绍面板。 */
+.info-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 35%);
+}
+
+.info-panel {
+  width: min(88vw, 430px);
+  max-height: 72vh;
+  overflow-y: auto;
+  padding: 18px 20px;
+  border: 1px solid rgb(255 255 255 / 55%);
+  border-radius: 10px;
+  background: rgb(8 20 28 / 92%);
+  color: #fff;
+  text-align: left;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 10px 32px rgb(0 0 0 / 40%);
+}
+
+.info-panel-kicker {
+  color: rgb(191 233 255 / 72%);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.info-panel-title {
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.info-panel-content {
+  margin-top: 10px;
+  color: rgb(255 255 255 / 88%);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.info-panel-close {
+  margin-top: 16px;
+  padding: 8px 18px;
+  border: 1px solid rgb(255 255 255 / 45%);
+  border-radius: 6px;
+  background: rgb(0 0 0 / 40%);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.info-panel-close:hover {
+  background: rgb(0 0 0 / 55%);
+}
+
 .loading-status {
   position: absolute;
   top: 50%;
